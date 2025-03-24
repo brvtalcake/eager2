@@ -17,16 +17,8 @@ fn eq() {
 #[test]
 fn iif() {
     let v = 1;
-    eager! {iif!(
-        eq!{{a}, {a}},
-        {let v = v*10;},
-        {asdf * / 4}
-    )};
+    eager! {lazy_if![eq!{{a}, {a}}]{let v = v*10;}{asdf * / 4}};
     assert_eq!(v, 10);
-    eager! {iif!(
-        eq!{{a}, {b}},
-        {asdf * / 4},
-        {let v = v*10;},
-    )};
+    eager! {lazy_if![eq!{{a}, {b}}]{asdf * / 4}{let v = v*10;}};
     assert_eq!(v, 100);
 }

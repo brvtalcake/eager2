@@ -100,19 +100,74 @@ fn expect_group<'a>(
     }
 }
 fn expect_string_literal(tt: Result<TokenTree, Span>) -> Result<String, Diagnostic> {
-    match tt {
-        Err(span) => Err(diagnostic!(
+    let tt = match tt {
+        Err(span) => {
+            return Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match string literal")),
+            note = "while trying to match string literal"));
+        }
         Ok(TokenTree::Literal(l)) => {
             let string = l.to_string();
             if !string.starts_with('"') || !string.ends_with('"') {
                 return Err(diagnostic!(l, Level::Error, "expected string literal"));
             }
-            Ok(string)
+            return Ok(string);
         }
-        Ok(tt) => Err(diagnostic!(tt, Level::Error, "expected string literal")),
-    }
+        Ok(TokenTree::Group(g)) if g.delimiter() == Delimiter::None => {
+            let mut stream = g.stream().into_iter();
+            let tt = stream.next();
+            if stream.next().is_none() {
+                if let Ok(v) = expect_string_literal(tt.ok_or(g.span())) {
+                    return Ok(v);
+                }
+            }
+            TokenTree::Group(g)
+        }
+        Ok(tt) => tt,
+    };
+    Err(diagnostic!(
+        tt,
+        Level::Error,
+        "expected string literal, found token `{}`",
+        tt
+    ))
+}
+
+fn expect_ident_or_string(
+    tt: Result<TokenTree, Span>,
+) -> Result<Result<Ident, String>, Diagnostic> {
+    let tt = match tt {
+        Err(span) => {
+            return Err(diagnostic!(
+            span, Level::Error, "unexpected end of macro invocation";
+            note = "while trying to match ident or string literal `$input`"));
+        }
+        Ok(TokenTree::Ident(i)) => return Ok(Ok(i)),
+        Ok(TokenTree::Literal(l)) => {
+            let string = l.to_string();
+            if !string.starts_with('"') || !string.ends_with('"') {
+                abort!(l, "expected ident or string literal")
+            }
+            return Ok(Err(string));
+        }
+        Ok(TokenTree::Group(g)) if g.delimiter() == Delimiter::None => {
+            let mut stream = g.stream().into_iter();
+            let tt = stream.next();
+            if stream.next().is_none() {
+                if let Ok(v) = expect_ident_or_string(tt.ok_or(g.span())) {
+                    return Ok(v);
+                }
+            }
+            TokenTree::Group(g)
+        }
+
+        Ok(tt) => tt,
+    };
+    Err(diagnostic!(
+        tt,
+        Level::Error,
+        "expected ident or string literal"
+    ))
 }
 
 fn expect_literal<'a, 'b>(
@@ -347,10 +402,11 @@ enum ExecutableMacroType {
     Stringify,
     Include,
     IncludeStr,
+    CompileError,
 
     CCase,
     Eq,
-    Iif,
+    LazyIf,
     Unstringify,
 }
 
@@ -363,10 +419,11 @@ impl TryFrom<&str> for ExecutableMacroType {
             "stringify" => Self::Stringify,
             "include" => Self::Include,
             "include_str" => Self::IncludeStr,
+            "compile_error" => Self::CompileError,
 
             "ccase" => Self::CCase,
             "eq" => Self::Eq,
-            "iif" => Self::Iif,
+            "lazy_if" => Self::LazyIf,
             "unstringify" => Self::Unstringify,
             _ => return Err(()),
         })
@@ -510,6 +567,16 @@ fn execute_include_str(
     processed_out.push(string.into());
 }
 
+fn execute_compile_error(
+    span: Span,
+    free: Vec<TokenTree>,
+    locked: TokenStream,
+    processed: Vec<TokenTree>,
+) {
+    let s = TokenStream::from_iter(free.into_iter().chain(locked).chain(processed));
+    abort!(span, "{}", s);
+}
+
 fn execute_ccase(
     span: Span,
     free: Vec<TokenTree>,
@@ -521,20 +588,7 @@ fn execute_ccase(
 
     let mut args = free.into_iter().chain(locked).chain(processed);
 
-    let input = match args.next() {
-        None => abort!(
-            span, "unexpected end of macro invocation";
-            note = "while trying to match ident or string literal `$input`"),
-        Some(TokenTree::Ident(i)) => Ok(i),
-        Some(TokenTree::Literal(l)) => {
-            let string = l.to_string();
-            if !string.starts_with('"') || !string.ends_with('"') {
-                abort!(l, "expected ident or string literal")
-            }
-            Err(string)
-        }
-        Some(tt) => abort!(tt, "expected ident or string literal"),
-    };
+    let input = expect_ident_or_string(args.next().ok_or(span)).unwrap_or_abort();
     expect_punct(args.next().ok_or(span), ',').unwrap_or_abort();
 
     let [mut from, mut boundaries, mut to, mut pattern, mut delimeter] =
@@ -715,17 +769,26 @@ fn execute_eq(
     processed: Vec<TokenTree>,
     processed_out: &mut Vec<TokenTree>,
 ) {
-    let mut args = free
-        .iter()
-        .cloned()
-        .chain(locked)
-        .chain(processed.iter().cloned());
+    let mut args = free.into_iter().chain(locked).chain(processed);
     fn tt_eq((a, b): (TokenTree, TokenTree)) -> bool {
         match (a, b) {
             (TokenTree::Group(a), TokenTree::Group(b)) => group_eq(&a, &b),
             (TokenTree::Ident(a), TokenTree::Ident(b)) => a == b,
             (TokenTree::Punct(a), TokenTree::Punct(b)) => a.as_char() == b.as_char(),
             (TokenTree::Literal(a), TokenTree::Literal(b)) => a.to_string() == b.to_string(),
+            (TokenTree::Group(g), tt) | (tt, TokenTree::Group(g))
+                if g.delimiter() == Delimiter::None =>
+            {
+                let mut stream = g.stream().into_iter();
+                let Some(v) = stream.next() else {
+                    return false;
+                };
+                if stream.next().is_some() {
+                    return false;
+                }
+                tt_eq((v, tt))
+            }
+
             _ => false,
         }
     }
@@ -754,35 +817,38 @@ fn execute_eq(
     processed_out.push(Ident::new("true", span).into());
 }
 
-fn execute_iif(
+fn execute_lazy_if(
     span: Span,
     free: Vec<TokenTree>,
     locked: TokenStream,
     processed: Vec<TokenTree>,
-    processed_out: &mut Vec<TokenTree>,
+    unprocessed: &mut Box<dyn TokenIterator>,
 ) {
-    let mut args = free
-        .iter()
-        .cloned()
-        .chain(locked)
-        .chain(processed.iter().cloned());
-    let check = expect_ident(args.next().ok_or(span), Param::Named("check")).unwrap_or_abort();
-    expect_punct(args.next().ok_or(span), ',').unwrap_or_abort();
-    let true_case =
-        expect_group(args.next().ok_or(span), Param::Named("true_case")).unwrap_or_abort();
-    expect_punct(args.next().ok_or(span), ',').unwrap_or_abort();
-    let false_case =
-        expect_group(args.next().ok_or(span), Param::Named("false_case")).unwrap_or_abort();
-    args.next()
-        .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
+    let mut args = free.into_iter().chain(locked).chain(processed);
 
-    if check == "true" {
-        processed_out.extend(true_case.stream());
+    let check = expect_ident(args.next().ok_or(span), Param::Named("check")).unwrap_or_abort();
+    if args.next().is_some() {
+        abort!(span, "`lazy_if!()` takes 1 argument")
+    }
+
+    let check = if check == "true" {
+        true
     } else if check == "false" {
-        processed_out.extend(false_case.stream());
+        false
     } else {
         abort!(check, "expected either token `true` or token `false");
-    }
+    };
+
+    let true_case =
+        expect_group(unprocessed.next().ok_or(span), Param::Named("true_case")).unwrap_or_abort();
+
+    let false_case =
+        expect_group(unprocessed.next().ok_or(span), Param::Named("false_case")).unwrap_or_abort();
+
+    let output = if check { true_case } else { false_case }.stream();
+
+    let old_unproccesed = mem::replace(unprocessed, Box::new([].into_iter()));
+    *unprocessed = Box::new(output.into_iter().chain(old_unproccesed))
 }
 
 fn execute_unstringify(
@@ -838,6 +904,9 @@ impl ExecutableMacroType {
             Self::IncludeStr => {
                 execute_include_str(span, free, locked, processed, &mut state.processed);
             }
+            Self::CompileError => {
+                execute_compile_error(span, free, locked, processed);
+            }
 
             Self::CCase => {
                 execute_ccase(span, free, locked, processed, &mut state.processed);
@@ -845,8 +914,8 @@ impl ExecutableMacroType {
             Self::Eq => {
                 execute_eq(span, free, locked, processed, &mut state.processed);
             }
-            Self::Iif => {
-                execute_iif(span, free, locked, processed, &mut state.processed);
+            Self::LazyIf => {
+                execute_lazy_if(span, free, locked, processed, &mut state.unprocessed);
             }
             Self::Unstringify => {
                 execute_unstringify(span, free, locked, processed, &mut state.unprocessed);
