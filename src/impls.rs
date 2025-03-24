@@ -3,354 +3,14 @@ use std::str::FromStr;
 use std::{env, fs, mem};
 
 use dyn_clone::DynClone;
-use proc_macro_crate::{FoundCrate, crate_name};
-use proc_macro_error2::{Diagnostic, Level, ResultExt, diagnostic};
-use proc_macro_error2::{abort, abort_call_site};
+use proc_macro_error2::ResultExt;
+use proc_macro_error2::abort;
 use proc_macro2::{
-    Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree, token_stream,
+    Delimiter, Group, Ident, Literal, Spacing, Span, TokenStream, TokenTree, token_stream,
 };
 use quote::{ToTokens, TokenStreamExt, quote};
 
-const EAGER_CALL_SIGIL: &str = "0𓊆eager2𓊇";
-const LAZY_SIGIL: &str = "𓆉";
-const EAGER_SIGIL: &str = "𓂺";
-const SIGIL_ERROR: &str = "expected 𓆉 or 𓂺";
-
-const EAGER2_IDENT: &str = "__eager2_ident_hyR7dMdkMPcptU6h21dioFE3EhoLprgj";
-
-enum Param<'a, V> {
-    Named(&'a str),
-    ExactValue(V),
-}
-
-impl<V> From<V> for Param<'_, V> {
-    fn from(v: V) -> Self {
-        Self::ExactValue(v)
-    }
-}
-
-fn expect_punct(tt: Result<TokenTree, Span>, c: char) -> Result<Punct, Diagnostic> {
-    match tt {
-        Err(span) => Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match token `{}`", c)),
-        Ok(TokenTree::Punct(p)) if p.as_char() == c => Ok(p),
-        Ok(tt) => Err(diagnostic!(tt, Level::Error, "expected token: `{}`", c)),
-    }
-}
-
-fn expect_ident<'a, 'b>(
-    tt: Result<TokenTree, Span>,
-    s: impl Into<Param<'a, &'b str>>,
-) -> Result<Ident, Diagnostic> {
-    match (tt, s.into()) {
-        (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match ident `{}`", s)),
-        (Err(span), Param::Named(s)) => Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match ident `${}:ident`", s)),
-        (Ok(TokenTree::Ident(i)), Param::ExactValue(s)) if i == s => Ok(i),
-        (Ok(TokenTree::Ident(i)), Param::Named(_)) => Ok(i),
-        (Ok(tt), Param::ExactValue(s)) => {
-            Err(diagnostic!(tt, Level::Error, "expected ident: `{}`", s))
-        }
-        (Ok(tt), Param::Named(s)) => Err(diagnostic!(
-            tt,
-            Level::Error,
-            "expected ident: `${}:ident`",
-            s
-        )),
-    }
-}
-
-fn expect_group<'a>(
-    tt: Result<TokenTree, Span>,
-    d: impl Into<Param<'a, Delimiter>>,
-) -> Result<Group, Diagnostic> {
-    fn to_char(d: Delimiter) -> char {
-        match d {
-            Delimiter::Parenthesis => '(',
-            Delimiter::Brace => '{',
-            Delimiter::Bracket => '[',
-            Delimiter::None => '∅',
-        }
-    }
-    match (tt, d.into()) {
-        (Err(span), Param::ExactValue(d)) => Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match ident `{}`", to_char(d))),
-        (Err(span), Param::Named(g)) => Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match ident `${}:group`", g)),
-        (Ok(TokenTree::Group(g)), Param::ExactValue(d)) if g.delimiter() == d => Ok(g),
-        (Ok(TokenTree::Group(g)), Param::Named(_)) => Ok(g),
-        (Ok(tt), Param::ExactValue(d)) => Err(diagnostic!(
-            tt,
-            Level::Error,
-            "expected token: `{}`",
-            to_char(d)
-        )),
-        (Ok(tt), Param::Named(g)) => Err(diagnostic!(
-            tt,
-            Level::Error,
-            "expected one of '(', '[', or '{{ for `${}:group`",
-            g
-        )),
-    }
-}
-fn expect_string_literal(tt: Result<TokenTree, Span>) -> Result<String, Diagnostic> {
-    let tt = match tt {
-        Err(span) => {
-            return Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match string literal"));
-        }
-        Ok(TokenTree::Literal(l)) => {
-            let string = l.to_string();
-            if !string.starts_with('"') || !string.ends_with('"') {
-                return Err(diagnostic!(l, Level::Error, "expected string literal"));
-            }
-            return Ok(string);
-        }
-        Ok(TokenTree::Group(g)) if g.delimiter() == Delimiter::None => {
-            let mut stream = g.stream().into_iter();
-            let tt = stream.next();
-            if stream.next().is_none() {
-                if let Ok(v) = expect_string_literal(tt.ok_or(g.span())) {
-                    return Ok(v);
-                }
-            }
-            TokenTree::Group(g)
-        }
-        Ok(tt) => tt,
-    };
-    Err(diagnostic!(
-        tt,
-        Level::Error,
-        "expected string literal, found token `{}`",
-        tt
-    ))
-}
-
-fn expect_ident_or_string(
-    tt: Result<TokenTree, Span>,
-) -> Result<Result<Ident, String>, Diagnostic> {
-    let tt = match tt {
-        Err(span) => {
-            return Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match ident or string literal `$input`"));
-        }
-        Ok(TokenTree::Ident(i)) => return Ok(Ok(i)),
-        Ok(TokenTree::Literal(l)) => {
-            let string = l.to_string();
-            if !string.starts_with('"') || !string.ends_with('"') {
-                abort!(l, "expected ident or string literal")
-            }
-            return Ok(Err(string));
-        }
-        Ok(TokenTree::Group(g)) if g.delimiter() == Delimiter::None => {
-            let mut stream = g.stream().into_iter();
-            let tt = stream.next();
-            if stream.next().is_none() {
-                if let Ok(v) = expect_ident_or_string(tt.ok_or(g.span())) {
-                    return Ok(v);
-                }
-            }
-            TokenTree::Group(g)
-        }
-
-        Ok(tt) => tt,
-    };
-    Err(diagnostic!(
-        tt,
-        Level::Error,
-        "expected ident or string literal"
-    ))
-}
-
-fn expect_literal<'a, 'b>(
-    tt: Result<TokenTree, Span>,
-    s: impl Into<Param<'a, &'b str>>,
-) -> Result<Literal, Diagnostic> {
-    match (tt, s.into()) {
-        (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match ident `{}`", s)),
-        (Err(span), Param::Named(s)) => Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match ident `${}:ident`", s)),
-        (Ok(TokenTree::Literal(l)), Param::ExactValue(s)) if l.to_string() == s => Ok(l),
-        (Ok(TokenTree::Literal(l)), Param::Named(_)) => Ok(l),
-        (Ok(tt), Param::ExactValue(s)) => {
-            Err(diagnostic!(tt, Level::Error, "expected ident: `{}`", s))
-        }
-        (Ok(tt), Param::Named(s)) => Err(diagnostic!(
-            tt,
-            Level::Error,
-            "expected ident: `${}:ident`",
-            s
-        )),
-    }
-}
-
-pub fn eager_macro_rules(stream: TokenStream) -> TokenStream {
-    let found_crate = match crate_name("eager2") {
-        Err(e) => abort_call_site!(
-            "eager2 is not present in `Cargo.toml`";
-            error = "{}", e;
-        ),
-        Ok(FoundCrate::Itself) => Ident::new("eager2", Span::call_site()),
-        Ok(FoundCrate::Name(name)) => Ident::new(&name, Span::call_site()),
-    };
-    let found_crate = quote! {::#found_crate};
-
-    let mut stream = stream.into_iter().peekable();
-
-    let hidden_ident = match stream.peek() {
-        None => return TokenStream::new(),
-
-        Some(TokenTree::Punct(p)) if p.as_char() == '$' => {
-            let dollar = stream.next();
-            match stream.next() {
-                None => abort!(dollar, "expected ident after $"),
-                Some(TokenTree::Ident(ident)) => ident,
-                Some(_token) => abort!(_token, "expected ident after $"),
-            }
-        }
-        Some(_token) => Ident::new(EAGER2_IDENT, Span::call_site()),
-    };
-
-    let mut outputs = vec![];
-
-    while stream.peek().is_some() {
-        let mut metas = vec![];
-        loop {
-            match stream.peek() {
-                None => abort_call_site!("expected # or macro_rules"),
-                Some(TokenTree::Punct(p)) if p.as_char() == '#' => {
-                    let pound = stream.next().unwrap();
-                    match stream.next() {
-                        None => abort_call_site!("expected ["),
-                        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => {
-                            metas.push(pound);
-                            metas.push(TokenTree::Group(g));
-                        }
-                        Some(_token) => abort!(_token, "expected ["),
-                    }
-                }
-                Some(TokenTree::Ident(i)) if i == "macro_rules" => break,
-                Some(t) => abort!(t, "expected token `#` or `macro_rules`"),
-            }
-        }
-        let _macro_rules = stream.next().unwrap();
-        match stream.next() {
-            Some(TokenTree::Punct(p)) if p.as_char() == '!' => {}
-            None => abort_call_site!("expected token `!`"),
-            Some(t) => abort!(t, "expected token `!`"),
-        }
-        let macro_name = match stream.next() {
-            Some(TokenTree::Ident(i)) => i,
-            None => abort_call_site!("expected ident"),
-            Some(t) => abort!(t, "expected ident"),
-        };
-        let group = match stream.next() {
-            Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => g,
-            None => abort_call_site!("expected {{"),
-            Some(t) => abort!(t, "expected {{"),
-        };
-
-        struct Rule {
-            grammer: Group,
-            expansion: Group,
-        }
-
-        let mut rules = vec![];
-        let mut stream = group.stream().into_iter();
-        loop {
-            let grammer = match stream.next() {
-                None => break,
-                Some(TokenTree::Group(g)) => g,
-                Some(t) => abort!(t, "expected {{ or [ or ("),
-            };
-            // Arrow
-            match stream.next() {
-                Some(TokenTree::Punct(p))
-                    if p.as_char() == '=' && p.spacing() == Spacing::Joint => {}
-                None => abort_call_site!("expected ="),
-                Some(t) => abort!(t, "expected ="),
-            }
-            match stream.next() {
-                Some(TokenTree::Punct(p)) if p.as_char() == '>' => {}
-                None => abort_call_site!("expected >"),
-                Some(t) => abort!(t, "expected >"),
-            }
-            let expansion = match stream.next() {
-                None => break,
-                Some(TokenTree::Group(g)) => g,
-                Some(t) => abort!(t, "expected {{ or [ or ("),
-            };
-            match stream.next() {
-                None => {
-                    rules.push(Rule { grammer, expansion });
-                    break;
-                }
-                Some(TokenTree::Punct(p)) if p.as_char() == ';' => {
-                    rules.push(Rule { grammer, expansion });
-                }
-                Some(t) => abort!(t, "expected ;"),
-            }
-        }
-
-        let eager_call_sigil = Literal::from_str(EAGER_CALL_SIGIL).unwrap();
-
-        let eager_rules = rules.iter().map(|Rule { grammer, expansion }| {
-            let grammer = grammer.stream();
-            let expansion = expansion.stream();
-            quote! {
-                (
-                    @eager[$($#hidden_ident:tt)*]
-                    #grammer
-                ) => {
-                    #found_crate::eager_internal!{
-                        #eager_call_sigil[$($#hidden_ident)*]
-                        #expansion
-                    }
-                };
-            }
-        });
-        let pure_rules = rules.iter().map(|Rule { grammer, expansion }| {
-            let grammer = grammer.stream();
-            let expansion = expansion.stream();
-            quote! {
-                (
-                    #grammer
-                ) => {
-                    #expansion
-                };
-            }
-        });
-
-        let output = quote! {
-            #(#metas)*
-            macro_rules! #macro_name{
-                #(#eager_rules)*
-                // Put the pure version after so eager is always tried first
-                #(#pure_rules)*
-            }
-        };
-
-        outputs.push(output);
-    }
-
-    let output = quote! { #(#outputs)* };
-
-    #[cfg(feature = "debug")]
-    proc_macro_error2::emit_call_site_warning! {"eager_macro_rules output: {}", output}
-
-    output
-}
+use crate::utils::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Mode {
@@ -1106,12 +766,13 @@ pub fn eager(stream: TokenStream) -> TokenStream {
     #[cfg(feature = "debug")]
     proc_macro_error2::emit_call_site_warning! {"eager input: {}", stream}
 
+    let eager_call_sigil = eager_call_sigil();
     let state = EagerState::new(Span::call_site(), Delimiter::Bracket, Mode::Eager, stream);
     let output = match state.process() {
         Ok((free, locked, processed)) => quote! { #(#free)* #locked #(#processed)* },
         Err((state, eager_macro, stream)) => {
             quote! {
-                #eager_macro{@eager #state #stream}
+                #eager_macro{#eager_call_sigil #state #stream}
             }
         }
     };
@@ -1126,12 +787,13 @@ pub fn lazy(stream: TokenStream) -> TokenStream {
     #[cfg(feature = "debug")]
     proc_macro_error2::emit_call_site_warning! {"lazy input: {}", stream}
 
+    let eager_call_sigil = eager_call_sigil();
     let state = EagerState::new(Span::call_site(), Delimiter::Bracket, Mode::Lazy, stream);
     let output = match state.process() {
         Ok((free, locked, processed)) => quote! { #(#free)* #locked #(#processed)* },
         Err((state, eager_macro, stream)) => {
             quote! {
-                #eager_macro{@eager #state #stream}
+                #eager_macro{#eager_call_sigil #state #stream}
             }
         }
     };
@@ -1160,11 +822,12 @@ pub fn eager_internal(stream: TokenStream) -> TokenStream {
     state.inject_expanded(stream);
     let result = state.process();
 
+    let eager_call_sigil = eager_call_sigil();
     let output = match result {
         Ok((free, locked, processed)) => quote! { #(#free)* #locked #(#processed)* },
         Err((state, eager_macro, stream)) => {
             quote! {
-                #eager_macro{@eager #state #stream}
+                #eager_macro{#eager_call_sigil #state #stream}
             }
         }
     };

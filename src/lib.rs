@@ -21,6 +21,9 @@
 use proc_macro_error2::proc_macro_error;
 
 mod impls;
+mod rules;
+mod state;
+mod utils;
 
 /// Declares [eager!](macro.eager.html)-enabled macros.
 ///
@@ -65,7 +68,7 @@ mod impls;
 #[proc_macro]
 #[proc_macro_error]
 pub fn eager_macro_rules(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    impls::eager_macro_rules(stream.into()).into()
+    rules::eager_macro_rules(stream.into()).into()
 }
 
 /// Emulates eager expansion of macros.
