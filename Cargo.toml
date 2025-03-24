@@ -17,6 +17,7 @@ github = { repository = "Daniel-Aaron-Bloom/cphf-rs", workflow = "CI" }
 proc-macro = true
 
 [dependencies]
+convert_case = "0.8.0"
 dyn-clone = "1.0.19"
 proc-macro-crate = "3"
 proc-macro-error2 = { version = "2", default-features = false }
