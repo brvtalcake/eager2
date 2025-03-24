@@ -28,3 +28,13 @@ mod test_concat {
         assert_eq!(0, y);
     }
 }
+
+
+#[test]
+fn test_include() {
+    eager2::eager! {
+        include!{concat!{env!("CARGO_MANIFEST_DIR"), "/./includes/simple.rs"}}
+    }
+    assert_eq!(10, v);
+
+}

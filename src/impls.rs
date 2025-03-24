@@ -396,7 +396,7 @@ fn execute_env(
         abort!(span, "`env!()` takes 1 or 2 arguments")
     }
 
-    let value = match (env::var(&key), error) {
+    let value = match (env::var(&key[1..key.len() - 1]), error) {
         (Ok(value), _) => value,
         (Err(_), Some(error)) => abort!(span, "{}", error),
         (Err(env::VarError::NotPresent), None) => abort!(
@@ -488,14 +488,15 @@ fn execute_include(
     unprocessed: &mut Box<dyn TokenIterator>,
 ) {
     let content = include_helper(span, free, locked, processed);
-    let parsed = TokenStream::from_str(&content[1..content.len() - 1]).unwrap();
+    let parsed = TokenStream::from_str(&content).unwrap();
 
     #[cfg(feature = "debug")]
-    proc_macro_error2::emit_call_site_warning! {"include result:{}", unstrung}
+    proc_macro_error2::emit_call_site_warning! {"include result:{}", parsed}
 
     let old_unproccesed = mem::replace(unprocessed, Box::new([].into_iter()));
     *unprocessed = Box::new(parsed.into_iter().chain(old_unproccesed))
 }
+
 fn execute_include_str(
     span: Span,
     free: Vec<TokenTree>,
