@@ -81,8 +81,28 @@ impl IsPunct for (char, Spacing) {
     }
 }
 
+fn eat_zero_group(tt: Result<TokenTree, Span>) -> Result<TokenTree, Span> {
+    let orig_tt = tt?;
+    let mut tt = orig_tt.clone();
+    loop {
+        match tt {
+            TokenTree::Group(g) if g.delimiter() == Delimiter::None => {
+                let mut stream = g.stream().into_iter();
+                let Some(next_tt) = stream.next() else {
+                    return Ok(orig_tt);
+                };
+                if stream.next().is_some() {
+                    return Ok(orig_tt);
+                }
+                tt = next_tt;
+            }
+            tt => return Ok(tt),
+        }
+    }
+}
+
 pub fn expect_punct(tt: Result<TokenTree, Span>, c: impl IsPunct) -> Result<Punct, Diagnostic> {
-    match tt {
+    match eat_zero_group(tt) {
         Err(span) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match token `{}`", c.as_char())),
@@ -100,7 +120,7 @@ pub fn expect_ident<'a, 'b>(
     tt: Result<TokenTree, Span>,
     s: impl Into<Param<'a, &'b str>>,
 ) -> Result<Ident, Diagnostic> {
-    match (tt, s.into()) {
+    match (eat_zero_group(tt), s.into()) {
         (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match ident `{}`", s)),
@@ -130,10 +150,10 @@ pub fn expect_group<'a>(
             Delimiter::Parenthesis => '(',
             Delimiter::Brace => '{',
             Delimiter::Bracket => '[',
-            Delimiter::None => '∅',
+            Delimiter::None => panic!("∅ should never be used"),
         }
     }
-    match (tt, d.into()) {
+    match (eat_zero_group(tt), d.into()) {
         (Err(span), Param::ExactValue(d)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match ident `{}`", to_char(d))),
@@ -158,7 +178,7 @@ pub fn expect_group<'a>(
 }
 
 pub fn expect_string_literal(tt: Result<TokenTree, Span>) -> Result<String, Diagnostic> {
-    let tt = match tt {
+    let tt = match eat_zero_group(tt) {
         Err(span) => {
             return Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
@@ -170,16 +190,6 @@ pub fn expect_string_literal(tt: Result<TokenTree, Span>) -> Result<String, Diag
                 return Err(diagnostic!(l, Level::Error, "expected string literal"));
             }
             return Ok(string);
-        }
-        Ok(TokenTree::Group(g)) if g.delimiter() == Delimiter::None => {
-            let mut stream = g.stream().into_iter();
-            let tt = stream.next();
-            if stream.next().is_none() {
-                if let Ok(v) = expect_string_literal(tt.ok_or(g.span())) {
-                    return Ok(v);
-                }
-            }
-            TokenTree::Group(g)
         }
         Ok(tt) => tt,
     };
@@ -194,7 +204,7 @@ pub fn expect_string_literal(tt: Result<TokenTree, Span>) -> Result<String, Diag
 pub fn expect_ident_or_string(
     tt: Result<TokenTree, Span>,
 ) -> Result<Result<Ident, String>, Diagnostic> {
-    let tt = match tt {
+    let tt = match eat_zero_group(tt) {
         Err(span) => {
             return Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
@@ -207,16 +217,6 @@ pub fn expect_ident_or_string(
                 abort!(l, "expected ident or string literal")
             }
             return Ok(Err(string));
-        }
-        Ok(TokenTree::Group(g)) if g.delimiter() == Delimiter::None => {
-            let mut stream = g.stream().into_iter();
-            let tt = stream.next();
-            if stream.next().is_none() {
-                if let Ok(v) = expect_ident_or_string(tt.ok_or(g.span())) {
-                    return Ok(v);
-                }
-            }
-            TokenTree::Group(g)
         }
 
         Ok(tt) => tt,
@@ -232,7 +232,7 @@ pub fn expect_literal<'a, 'b>(
     tt: Result<TokenTree, Span>,
     s: impl Into<Param<'a, &'b str>>,
 ) -> Result<Literal, Diagnostic> {
-    match (tt, s.into()) {
+    match (eat_zero_group(tt), s.into()) {
         (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match literal `{}`", s)),
