@@ -5,7 +5,7 @@ use quote::quote;
 use crate::utils::*;
 
 pub fn eager_macro_rules(stream: TokenStream) -> TokenStream {
-    let found_crate = find_crate();
+    let found_crate = find_crate_path();
 
     let mut stream = stream.into_iter().peekable();
 
@@ -113,7 +113,7 @@ pub fn eager_macro_rules(stream: TokenStream) -> TokenStream {
                     #eager_call_sigil[$($#hidden_ident:tt)*]
                     #grammer
                 ) => {
-                    #found_crate::eager_internal!{
+                    #found_crate::eager!{
                         #eager_call_sigil[$($#hidden_ident)*]
                         #expansion
                     }
@@ -147,7 +147,7 @@ pub fn eager_macro_rules(stream: TokenStream) -> TokenStream {
     let output = quote! { #(#outputs)* };
 
     #[cfg(feature = "debug")]
-    proc_macro_error2::emit_call_site_warning! {"eager_macro_rules output: {}", output}
+    proc_macro_error2::emit_call_site_warning!("eager_macro_rules output: {}", output);
 
     output
 }

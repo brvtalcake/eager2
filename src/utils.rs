@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::str::FromStr;
 
 use proc_macro_crate::{FoundCrate, crate_name};
@@ -13,16 +14,30 @@ pub const LAZY_SIGIL: &str = "𓆉";
 pub const EAGER_SIGIL: &str = "𓂺";
 pub const SIGIL_ERROR: &str = "expected 𓆉 or 𓂺";
 
-pub fn find_crate() -> TokenStream {
-    let found_crate = match crate_name("eager2") {
+pub fn find_crate() -> Cow<'static, str> {
+    match crate_name("eager2") {
         Err(e) => abort_call_site!(
             "eager2 is not present in `Cargo.toml`";
             error = "{}", e;
         ),
-        Ok(FoundCrate::Itself) => Ident::new("eager2", Span::call_site()),
-        Ok(FoundCrate::Name(name)) => Ident::new(&name, Span::call_site()),
-    };
+        Ok(FoundCrate::Itself) => Cow::Borrowed("eager2"),
+        Ok(FoundCrate::Name(name)) => Cow::Owned(name),
+    }
+}
+pub fn find_crate_path() -> TokenStream {
+    let found_crate = find_crate();
+    let found_crate = Ident::new(&found_crate, Span::call_site());
     quote! {::#found_crate}
+}
+
+pub trait NextOr: Iterator {
+    fn next_or<E>(&mut self, e: E) -> Result<Self::Item, E>;
+}
+
+impl<I: Iterator> NextOr for I {
+    fn next_or<E>(&mut self, e: E) -> Result<Self::Item, E> {
+        self.next().ok_or(e)
+    }
 }
 
 pub fn eager_call_sigil() -> TokenTree {

@@ -329,10 +329,3 @@ pub fn eager(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
 pub fn lazy(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
     impls::lazy(stream.into()).into()
 }
-
-#[doc(hidden)]
-#[proc_macro]
-#[proc_macro_error]
-pub fn eager_internal(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    impls::eager_internal(stream.into()).into()
-}
