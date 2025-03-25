@@ -4,15 +4,19 @@ use std::str::FromStr;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro_error2::abort;
 use proc_macro_error2::{Diagnostic, Level, abort_call_site, diagnostic};
-use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::quote;
 
-pub const EAGER2_IDENT: &str = "__eager2_ident_hyR7dMdkMPcptU6h21dioFE3EhoLprgj";
+const EAGER2_IDENT: &str = "__eager2_ident_hyR7dMdkMPcptU6h21dioFE3EhoLprgj";
 
 pub const EAGER_CALL_SIGIL: &str = "0𓊆eager2𓊇";
 pub const LAZY_SIGIL: &str = "𓆉";
 pub const EAGER_SIGIL: &str = "𓂺";
 pub const SIGIL_ERROR: &str = "expected 𓆉 or 𓂺";
+
+pub fn get_eager_2_ident() -> Ident {
+    Ident::new(EAGER2_IDENT, Span::call_site())
+}
 
 pub fn find_crate() -> Cow<'static, str> {
     match crate_name("eager2") {
@@ -24,9 +28,8 @@ pub fn find_crate() -> Cow<'static, str> {
         Ok(FoundCrate::Name(name)) => Cow::Owned(name),
     }
 }
-pub fn find_crate_path() -> TokenStream {
-    let found_crate = find_crate();
-    let found_crate = Ident::new(&found_crate, Span::call_site());
+pub fn crate_path(found_crate: &str) -> TokenStream {
+    let found_crate = Ident::new(found_crate, Span::call_site());
     quote! {::#found_crate}
 }
 
@@ -55,13 +58,41 @@ impl<V> From<V> for Param<'_, V> {
     }
 }
 
-pub fn expect_punct(tt: Result<TokenTree, Span>, c: char) -> Result<Punct, Diagnostic> {
+pub trait IsPunct {
+    fn as_char(&self) -> char;
+    fn is_punct(&self, p: &Punct) -> bool;
+}
+
+impl IsPunct for char {
+    fn as_char(&self) -> char {
+        *self
+    }
+    fn is_punct(&self, p: &Punct) -> bool {
+        p.as_char() == *self
+    }
+}
+
+impl IsPunct for (char, Spacing) {
+    fn as_char(&self) -> char {
+        self.0
+    }
+    fn is_punct(&self, p: &Punct) -> bool {
+        p.as_char() == self.0 && p.spacing() == self.1
+    }
+}
+
+pub fn expect_punct(tt: Result<TokenTree, Span>, c: impl IsPunct) -> Result<Punct, Diagnostic> {
     match tt {
         Err(span) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match token `{}`", c)),
-        Ok(TokenTree::Punct(p)) if p.as_char() == c => Ok(p),
-        Ok(tt) => Err(diagnostic!(tt, Level::Error, "expected token: `{}`", c)),
+            note = "while trying to match token `{}`", c.as_char())),
+        Ok(TokenTree::Punct(p)) if c.is_punct(&p) => Ok(p),
+        Ok(tt) => Err(diagnostic!(
+            tt,
+            Level::Error,
+            "expected token: `{}`",
+            c.as_char()
+        )),
     }
 }
 
@@ -120,7 +151,7 @@ pub fn expect_group<'a>(
         (Ok(tt), Param::Named(g)) => Err(diagnostic!(
             tt,
             Level::Error,
-            "expected one of '(', '[', or '{{ for `${}:group`",
+            "expected one of `(`, `[`, or `{{` for `${}:group`",
             g
         )),
     }
@@ -204,19 +235,19 @@ pub fn expect_literal<'a, 'b>(
     match (tt, s.into()) {
         (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match ident `{}`", s)),
+            note = "while trying to match literal `{}`", s)),
         (Err(span), Param::Named(s)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match ident `${}:ident`", s)),
+            note = "while trying to match literal `${}:literal`", s)),
         (Ok(TokenTree::Literal(l)), Param::ExactValue(s)) if l.to_string() == s => Ok(l),
         (Ok(TokenTree::Literal(l)), Param::Named(_)) => Ok(l),
         (Ok(tt), Param::ExactValue(s)) => {
-            Err(diagnostic!(tt, Level::Error, "expected ident: `{}`", s))
+            Err(diagnostic!(tt, Level::Error, "expected literal: `{}`", s))
         }
         (Ok(tt), Param::Named(s)) => Err(diagnostic!(
             tt,
             Level::Error,
-            "expected ident: `${}:ident`",
+            "expected literal: `${}:literal`",
             s
         )),
     }

@@ -5,7 +5,7 @@ fn to_case() {
     let r = eager! {ccase!("myVarName", t: "snake")};
     assert_eq!(r, "my_var_name");
 
-    let r = eager! {eq!({my_var_name}, {ccase!(myVarName, t: "snake")})};
+    let r = eager! {token_eq!({my_var_name}, {ccase!(myVarName, t: "snake")})};
     assert!(r);
 
     let r = eager! {ccase!("myVarName", t: "kebab")};

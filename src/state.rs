@@ -29,6 +29,9 @@ impl TryFrom<&'_ str> for Mode {
 }
 
 impl Mode {
+    pub fn eager(b: bool) -> Self {
+        if b { Self::Eager } else { Self::Lazy }
+    }
     fn from(span: Span, t: Option<TokenTree>) -> Self {
         let i = match t {
             Some(TokenTree::Ident(i)) => i,
@@ -233,16 +236,16 @@ impl EfficientGroupT {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ExecutableMacroType {
-    Env,
+    CompileError,
     Concat,
-    Stringify,
+    Env,
     Include,
     IncludeStr,
-    CompileError,
+    Stringify,
 
     CCase,
-    Eq,
-    LazyIf,
+    EagerIf,
+    TokenEq,
     Unstringify,
 }
 
@@ -250,17 +253,18 @@ impl TryFrom<&str> for ExecutableMacroType {
     type Error = ();
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(match value {
-            "env" => Self::Env,
+            "compile_error" => Self::CompileError,
             "concat" => Self::Concat,
-            "stringify" => Self::Stringify,
+            "env" => Self::Env,
             "include" => Self::Include,
             "include_str" => Self::IncludeStr,
-            "compile_error" => Self::CompileError,
+            "stringify" => Self::Stringify,
 
             "ccase" => Self::CCase,
-            "eq" => Self::Eq,
-            "lazy_if" => Self::LazyIf,
+            "eager_if" => Self::EagerIf,
+            "token_eq" => Self::TokenEq,
             "unstringify" => Self::Unstringify,
+
             _ => return Err(()),
         })
     }
@@ -311,9 +315,22 @@ fn execute_concat(
 ) {
     let mut buffer = String::new();
     let mut args = stream.into_iter();
-    while let Some(t) = args.next() {
-        let s = expect_string_literal(Ok(t)).unwrap_or_abort();
-        buffer += &s[1..s.len() - 1];
+    while let Some(tt) = args.next() {
+        let i = expect_ident(Ok(tt.clone()), "true");
+        let l = expect_literal(Ok(tt), Param::Named("arg"));
+
+        match (i, l) {
+            (_, Ok(l)) => {
+                let s = l.to_string();
+                if s.starts_with('"') && s.ends_with('"') {
+                    buffer += &s[1..s.len() - 1];
+                } else {
+                    buffer += &s;
+                }
+            }
+            (Ok(i), _) => buffer += &i.to_string(),
+            (_, Err(e)) => e.abort(),
+        }
         args.next()
             .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
     }
@@ -565,7 +582,7 @@ fn execute_ccase(
     processed_out.push(result);
 }
 
-fn execute_eq(
+fn execute_token_eq(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
@@ -618,7 +635,7 @@ fn execute_eq(
     processed_out.push(Ident::new("true", span).into());
 }
 
-fn execute_lazy_if(
+fn execute_eager_if(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     unprocessed: &mut Vec<token_stream::IntoIter>,
@@ -627,7 +644,7 @@ fn execute_lazy_if(
 
     let check = expect_ident(args.next().ok_or(span), Param::Named("check")).unwrap_or_abort();
     if args.next().is_some() {
-        abort!(span, "`lazy_if!()` takes 1 argument")
+        abort!(span, "`eager_if!()` takes 1 argument")
     }
 
     let check = if check == "true" {
@@ -714,11 +731,11 @@ impl ExecutableMacroType {
             Self::CCase => {
                 execute_ccase(span, stream, &mut state.processed);
             }
-            Self::Eq => {
-                execute_eq(span, stream, &mut state.processed);
+            Self::TokenEq => {
+                execute_token_eq(span, stream, &mut state.processed);
             }
-            Self::LazyIf => {
-                execute_lazy_if(span, stream, &mut state.unprocessed);
+            Self::EagerIf => {
+                execute_eager_if(span, stream, &mut state.unprocessed);
             }
             Self::Unstringify => {
                 execute_unstringify(span, stream, &mut state.unprocessed);
@@ -939,7 +956,10 @@ impl ToTokens for FullyProccesedState {
 
 impl State {
     // Should only be called with the top level stream
-    pub fn decode_from_stream(stream: TokenStream) -> Result<Self, Diagnostic> {
+    pub fn decode_from_stream<F>(stream: TokenStream, expansion: F) -> Result<Self, Diagnostic>
+    where
+        F: FnOnce(token_stream::IntoIter) -> token_stream::IntoIter,
+    {
         use Delimiter::Bracket;
 
         let span = Span::call_site();
@@ -956,7 +976,7 @@ impl State {
             abort!(span, "`eager2_state` should only contain one group")
         }
 
-        Ok(Self::decode_from_group(state, Some(stream)))
+        Ok(Self::decode_from_group(state, Some(expansion(stream))))
     }
 
     // Only should be called on encoded groups

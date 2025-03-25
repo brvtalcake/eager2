@@ -1,19 +1,25 @@
 //!
-//! This crate contians three macros used to simulate eager macro expansion:
+//! This crate contains three main macros used to simulate eager macro expansion:
 //!
-//! * `eager!`: Eagerly expands any macro in its body.
-//! * `eager_macro_rules!`: Used to declare macro that can be eagerly expanded with `eager!`.
-//! * `lazy!`: Used in `eager!` to revert to lazy macro expansion.
+//! * [`eager!`]: Eagerly expands any macro in its body.
+//! * [`eager_macro_rules!`]: Used to declare macro that can be eagerly expanded with `eager!`.
+//! * [`lazy!`]: Used in `eager!` to revert to lazy macro expansion.
 //!
-//! When in the eager environment, some eager versions of standard libary are provided, such as:
+//! In addition to these primary functions, some eager versions of standard libary are provided, such as:
 //!
-//! * stringify
-//! * env
-//! * concat
+//! * `compile_error!`
+//! * `concat!`
+//! * `env!`
+//! * `include!`
+//! * `include_str!`
+//! * `stringify!`
 //!
-//! In addition, some custom eager macros are provided to improve functionality
+//! Exapnding on this, some additional helpers are provided
 //!
-//! * ccase
+//! * `ccase!`
+//! * `eager_if!`
+//! * `token_eq!`
+//! * `unstringify!`
 //!
 //! See each macro's documentation for details.
 //!
@@ -25,22 +31,36 @@ mod rules;
 mod state;
 mod utils;
 
-/// Declares [eager!](macro.eager.html)-enabled macros.
+/// [[eager!](macro.eager.html)] Declares [eager!](macro.eager.html)-enabled macros.
 ///
+/// ## Syntax
+/// ```
+/// macro_rules! eager_macro_rules {
+///     ($($dollar:tt $id_1:ident)?
+///     $(
+///         $(#[$($metas:meta)*])*
+///         macro_rules! $macro_name:ident {
+///             $($rules:tt => $expansions:tt);+ $(;)?
+///         }
+///     )*) => { ... };
+/// }
+/// ```
 /// # Usage
 ///
-/// Wraps the usual `macro_rules!` syntax. First an identifier must be given, preceded by '$'.
+/// Wraps the usual `macro_rules!` syntax. First an identifier may be given, preceded by '$'.
 /// Then any number of macro declarations can be given using the usual `macro_rules!` syntax.
 /// Documentation and attributes are also given in the
 /// usual way just before each `macro_rules!`, i.e. inside `eager_macro_rules!`.
 ///
 /// Some restrictions apply to the `macro_rules!` declarations:
 ///
-/// * The identifier given at the beginning must not collide with any macro variable name
-/// used in any rule in any macro to be declared.
-/// * No rules should accept `@eager` as the first token, as this could conflict with the
-/// implementation of `eager!`. Wildcards are acceptable, as `eager_macro_rules!` will automatically
-/// resolve the ambiguity with the `eager!` implementation.
+/// * `macro_rules!` should avoid using identifiers that start with `__eager2_ident_`. This is
+/// because in order to make macros eager, `eager_macro_rules` needs to add it's own unique
+/// fragment identifier that does conflict with any of those present in the `macro_rules`. If
+/// absoultely necessary, it is possible to override this identifier by providing an alternative,
+/// prefixed with the token `$` as the first tokens to `eager_macro_rules`.
+/// * No macros should be called with, nor should expansions emit the literal `0𓊆eager2𓊇` as their
+/// first token, as this could conflict with the way eager expansion is preserved.
 ///
 /// # `eager!`-enabling example
 ///
@@ -71,9 +91,10 @@ pub fn eager_macro_rules(stream: proc_macro::TokenStream) -> proc_macro::TokenSt
     rules::eager_macro_rules(stream.into()).into()
 }
 
-/// Emulates eager expansion of macros.
+/// [[eager!](macro.eager.html)] Emulates eager expansion of macros.
 ///
 /// # Example
+///
 /// ```
 /// use eager2::{eager_macro_rules, eager};
 ///
@@ -103,8 +124,8 @@ pub fn eager_macro_rules(stream: proc_macro::TokenStream) -> proc_macro::TokenSt
 /// `eager!` does not work with any macro; only macros declared using [`eager_macro_rules!`] may be
 /// used. Such macros are said to be `eager!`-enabled.
 ///
-/// To enable the use of non-`eager!`-enabled macros inside an `eager!` call,
-/// a `lazy!` block can be inserted. Everything inside the `lazy!` block will be lazily expanded,
+/// To facilitate the use of non-`eager!`-enabled macros inside an `eager!` call,
+/// a [`lazy!`] block can be inserted. Everything inside the `lazy!` block will be lazily expanded,
 /// while everything outside it will continue to be eagerly expanded. Since, `lazy!` reverts
 /// to the usual rules for macro expansion, an `eager!` block can be inserted inside the `lazy!`
 /// block, to re-enable eager expansion for some subset of it.
@@ -118,15 +139,14 @@ pub fn eager_macro_rules(stream: proc_macro::TokenStream) -> proc_macro::TokenSt
 /// default macro recursion limit can be exceeded. So occasionally you may have to use
 /// `#![recursion_limit="256"]` or higher.
 ///
-/// * Debugging an eagerly expanded macro can be quite difficult. This crate has a`debug` feature
-/// which only operates on `nightly`, and can be quite verbose. Contributions to improve this
-/// are very welcome.
+/// * Debugging an eagerly expanded macro can be quite difficult. [`compile_error!`] can sometimes
+/// be helpful in this regard. This crate also has `debug` feature which only operates on `nightly`,
+/// and can be quite verbose. Contributions to improve this are very welcome.
 ///
 /// * Only `eager!`-enabled macros can be eagerly expanded, so existing macros do not gain much.
-/// The `lazy!` block alleviates this a bit, by allowing the use of existing macros in it,
-/// while eager expansion can be done around them.
-/// Luckily, `eager!`-enabling an existing macro should not be too much
-/// trouble using [`eager_macro_rules!`].
+/// The `lazy!` block alleviates this a bit, by allowing the use of existing macros in it, while
+/// eager expansion can be done around them. Luckily, `eager!`-enabling an existing macro should
+/// not be too much trouble using [`eager_macro_rules!`].
 ///
 /// ---
 /// # Macro expansions
@@ -304,21 +324,16 @@ pub fn eager_macro_rules(stream: proc_macro::TokenStream) -> proc_macro::TokenSt
 /// Since we expect the use of this macro to be broadly applicable, we propose the following
 /// conventions for the Rust community to use, to ease interoperability.
 ///
-/// ### Documentation
+/// ## Documentation
 ///
 /// To make it clearly visible that a given macro is `eager!`-enabled, its short rustdoc description
 /// must start with a pair of brackets, within which a link to the official `eager!` macro documentation
 /// must be provided. The link's visible text must be 'eager!' and
 /// the brackets must not be part of the link.
-///
-/// ### Auxiliary variable
-///
-/// For compatibility with `eager`, an auxiliary variable may be provided to `eager_macro_rules!`
-/// but it is not needed.
 #[proc_macro]
 #[proc_macro_error]
 pub fn eager(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    impls::eager(stream.into()).into()
+    impls::eval(stream.into(), true).into()
 }
 
 /// [[eager!](macro.eager.html)] Used within an [`eager!`](macro.eager.html) to revert to lazy expansion.
@@ -327,5 +342,116 @@ pub fn eager(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro]
 #[proc_macro_error]
 pub fn lazy(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    impls::lazy(stream.into()).into()
+    impls::eval(stream.into(), false).into()
+}
+
+/// [[eager!](macro.eager.html)] Causes compilation to fail with the given error message when encountered.
+///
+/// This macro should be used when a crate uses a conditional compilation strategy to provide
+/// better error messages for erroneous conditions. It's the compiler-level form of [`panic!`],
+/// but emits an error during *compilation* rather than at *runtime*.
+#[proc_macro]
+#[proc_macro_error]
+pub fn compile_error(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "compile_error").into()
+}
+
+/// [[eager!](macro.eager.html)] Concatenates literals into a static string slice.
+///
+/// This macro takes any number of comma-separated literals, yielding an
+/// expression of type `&'static str` which represents all of the literals
+/// concatenated left-to-right.
+///
+/// Integer and floating point literals are [stringified](core::stringify) in order to be
+/// concatenated.
+#[proc_macro]
+#[proc_macro_error]
+pub fn concat(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "concat").into()
+}
+
+/// [[eager!](macro.eager.html)] Inspects an environment variable at compile time.
+///
+/// This macro will expand to the value of the named environment variable at
+/// compile time, yielding an expression of type `&'static str`
+#[proc_macro]
+#[proc_macro_error]
+pub fn env(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "env").into()
+}
+
+/// [[eager!](macro.eager.html)] Parses a file as an expression or an item according to the context.
+/// The included file is placed in the surrounding code
+/// [unhygienically](https://doc.rust-lang.org/reference/macros-by-example.html#hygiene). If
+/// the included file is parsed as an expression and variables or functions share names across
+/// both files, it could result in variables or functions being different from what the
+/// included file expected.
+///
+/// The included file is located relative to the current file (similarly to how modules are
+/// found). The provided path is interpreted in a platform-specific way at compile time. So,
+/// for instance, an invocation with a Windows path containing backslashes `\` would not
+/// compile correctly on Unix.
+#[proc_macro]
+#[proc_macro_error]
+pub fn include(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "include").into()
+}
+
+/// [[eager!](macro.eager.html)] Includes a UTF-8 encoded file as a string.
+///
+/// The file is located relative to the current file (similarly to how
+/// modules are found). The provided path is interpreted in a platform-specific
+/// way at compile time. So, for instance, an invocation with a Windows path
+/// containing backslashes `\` would not compile correctly on Unix.
+///
+/// This macro will yield an expression of type `&'static str` which is the
+/// contents of the file.
+#[proc_macro]
+#[proc_macro_error]
+pub fn include_str(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "include_str").into()
+}
+
+/// [[eager!](macro.eager.html)] Stringifies its arguments.
+///
+/// This macro will yield an expression of type `&'static str` which is the
+/// stringification of all the tokens passed to the macro. No restrictions
+/// are placed on the syntax of the macro invocation itself.
+///
+/// Note that the expanded results of the input tokens may change in the
+/// future. You should be careful if you rely on the output.
+#[proc_macro]
+#[proc_macro_error]
+pub fn stringify(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "stringify").into()
+}
+
+/// [[eager!](macro.eager.html)] Convert strings between snake case, kebab case, camel case,
+/// title case, pascal case, and so many more.
+#[proc_macro]
+#[proc_macro_error]
+pub fn ccase(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "ccase").into()
+}
+
+/// [[eager!](macro.eager.html)] Conditionally expands into one of two blocks.
+#[proc_macro]
+#[proc_macro_error]
+pub fn eager_if(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "eager_if").into()
+}
+
+/// [[eager!](macro.eager.html)] Expands into the token `true` if two arguments
+/// are token-wise equivalent
+#[proc_macro]
+#[proc_macro_error]
+pub fn token_eq(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "token_eq").into()
+}
+
+/// [[eager!](macro.eager.html)] Parses a string as tokens.
+#[proc_macro]
+#[proc_macro_error]
+pub fn unstringify(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "unstringify").into()
 }
