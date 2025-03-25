@@ -81,28 +81,28 @@ impl IsPunct for (char, Spacing) {
     }
 }
 
-fn eat_zero_group(tt: Result<TokenTree, Span>) -> Result<TokenTree, Span> {
-    let orig_tt = tt?;
+pub fn eat_zero_group(tt: TokenTree) -> TokenTree {
+    let orig_tt = tt;
     let mut tt = orig_tt.clone();
     loop {
         match tt {
             TokenTree::Group(g) if g.delimiter() == Delimiter::None => {
                 let mut stream = g.stream().into_iter();
                 let Some(next_tt) = stream.next() else {
-                    return Ok(orig_tt);
+                    return orig_tt;
                 };
                 if stream.next().is_some() {
-                    return Ok(orig_tt);
+                    return orig_tt;
                 }
                 tt = next_tt;
             }
-            tt => return Ok(tt),
+            tt => return tt,
         }
     }
 }
 
 pub fn expect_punct(tt: Result<TokenTree, Span>, c: impl IsPunct) -> Result<Punct, Diagnostic> {
-    match eat_zero_group(tt) {
+    match tt.map(eat_zero_group) {
         Err(span) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match token `{}`", c.as_char())),
@@ -120,7 +120,7 @@ pub fn expect_ident<'a, 'b>(
     tt: Result<TokenTree, Span>,
     s: impl Into<Param<'a, &'b str>>,
 ) -> Result<Ident, Diagnostic> {
-    match (eat_zero_group(tt), s.into()) {
+    match (tt.map(eat_zero_group), s.into()) {
         (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match ident `{}`", s)),
@@ -153,7 +153,7 @@ pub fn expect_group<'a>(
             Delimiter::None => panic!("∅ should never be used"),
         }
     }
-    match (eat_zero_group(tt), d.into()) {
+    match (tt.map(eat_zero_group), d.into()) {
         (Err(span), Param::ExactValue(d)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match ident `{}`", to_char(d))),
@@ -178,7 +178,7 @@ pub fn expect_group<'a>(
 }
 
 pub fn expect_string_literal(tt: Result<TokenTree, Span>) -> Result<String, Diagnostic> {
-    let tt = match eat_zero_group(tt) {
+    let tt = match tt.map(eat_zero_group) {
         Err(span) => {
             return Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
@@ -204,7 +204,7 @@ pub fn expect_string_literal(tt: Result<TokenTree, Span>) -> Result<String, Diag
 pub fn expect_ident_or_string(
     tt: Result<TokenTree, Span>,
 ) -> Result<Result<Ident, String>, Diagnostic> {
-    let tt = match eat_zero_group(tt) {
+    let tt = match tt.map(eat_zero_group) {
         Err(span) => {
             return Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
@@ -232,7 +232,7 @@ pub fn expect_literal<'a, 'b>(
     tt: Result<TokenTree, Span>,
     s: impl Into<Param<'a, &'b str>>,
 ) -> Result<Literal, Diagnostic> {
-    match (eat_zero_group(tt), s.into()) {
+    match (tt.map(eat_zero_group), s.into()) {
         (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match literal `{}`", s)),

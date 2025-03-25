@@ -589,24 +589,11 @@ fn execute_token_eq(
 ) {
     let mut args = stream.into_iter();
     fn tt_eq((a, b): (TokenTree, TokenTree)) -> bool {
-        match (a, b) {
+        match (eat_zero_group(a), eat_zero_group(b)) {
             (TokenTree::Group(a), TokenTree::Group(b)) => group_eq(&a, &b),
             (TokenTree::Ident(a), TokenTree::Ident(b)) => a == b,
             (TokenTree::Punct(a), TokenTree::Punct(b)) => a.as_char() == b.as_char(),
             (TokenTree::Literal(a), TokenTree::Literal(b)) => a.to_string() == b.to_string(),
-            (TokenTree::Group(g), tt) | (tt, TokenTree::Group(g))
-                if g.delimiter() == Delimiter::None =>
-            {
-                let mut stream = g.stream().into_iter();
-                let Some(v) = stream.next() else {
-                    return false;
-                };
-                if stream.next().is_some() {
-                    return false;
-                }
-                tt_eq((v, tt))
-            }
-
             _ => false,
         }
     }
