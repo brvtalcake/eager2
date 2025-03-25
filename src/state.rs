@@ -588,17 +588,23 @@ fn execute_token_eq(
     processed_out: &mut EfficientGroupV,
 ) {
     let mut args = stream.into_iter();
-    fn tt_eq((a, b): (TokenTree, TokenTree)) -> bool {
-        match (eat_zero_group(a), eat_zero_group(b)) {
-            (TokenTree::Group(a), TokenTree::Group(b)) => group_eq(&a, &b),
-            (TokenTree::Ident(a), TokenTree::Ident(b)) => a == b,
-            (TokenTree::Punct(a), TokenTree::Punct(b)) => a.as_char() == b.as_char(),
-            (TokenTree::Literal(a), TokenTree::Literal(b)) => a.to_string() == b.to_string(),
-            _ => false,
+    struct TtWrapper(TokenTree);
+    impl PartialEq for TtWrapper {
+        fn eq(&self, other: &Self) -> bool {
+            match (eat_zero_group(self.0.clone()), eat_zero_group(other.0.clone())) {
+                (TokenTree::Group(a), TokenTree::Group(b)) => group_eq(&a, &b),
+                (TokenTree::Ident(a), TokenTree::Ident(b)) => a == b,
+                (TokenTree::Punct(a), TokenTree::Punct(b)) => a.as_char() == b.as_char(),
+                (TokenTree::Literal(a), TokenTree::Literal(b)) => a.to_string() == b.to_string(),
+                _ => false,
+            }
         }
     }
+    fn stream_eq(a: TokenStream, b: TokenStream) -> bool {
+        a.is_empty() == b.is_empty() && a.into_iter().map(TtWrapper).eq(b.into_iter().map(TtWrapper))
+    }
     fn group_eq(a: &Group, b: &Group) -> bool {
-        a.delimiter() == b.delimiter() && a.stream().into_iter().zip(b.stream()).all(tt_eq)
+        a.delimiter() == b.delimiter() && stream_eq(a.stream(), b.stream())
     }
 
     let mut prev = None;
