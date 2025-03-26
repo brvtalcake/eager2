@@ -591,7 +591,10 @@ fn execute_token_eq(
     struct TtWrapper(TokenTree);
     impl PartialEq for TtWrapper {
         fn eq(&self, other: &Self) -> bool {
-            match (eat_zero_group(self.0.clone()), eat_zero_group(other.0.clone())) {
+            match (
+                eat_zero_group(self.0.clone()),
+                eat_zero_group(other.0.clone()),
+            ) {
                 (TokenTree::Group(a), TokenTree::Group(b)) => group_eq(&a, &b),
                 (TokenTree::Ident(a), TokenTree::Ident(b)) => a == b,
                 (TokenTree::Punct(a), TokenTree::Punct(b)) => a.as_char() == b.as_char(),
@@ -601,7 +604,10 @@ fn execute_token_eq(
         }
     }
     fn stream_eq(a: TokenStream, b: TokenStream) -> bool {
-        a.is_empty() == b.is_empty() && a.into_iter().map(TtWrapper).eq(b.into_iter().map(TtWrapper))
+        a.is_empty() == b.is_empty()
+            && a.into_iter()
+                .map(TtWrapper)
+                .eq(b.into_iter().map(TtWrapper))
     }
     fn group_eq(a: &Group, b: &Group) -> bool {
         a.delimiter() == b.delimiter() && stream_eq(a.stream(), b.stream())
@@ -1029,6 +1035,10 @@ impl State {
         Ok(FullyProccesedState(self))
     }
 
+    fn has_locking(&self) -> bool {
+        !self.free.is_empty() || !self.locked.is_empty()
+    }
+
     fn process_one(&mut self, found_crate: &str) -> Option<(MacroPath, TokenStream)> {
         while let Some(unprocessed) = self.unprocessed.last_mut() {
             for tt in unprocessed {
@@ -1081,7 +1091,7 @@ impl State {
             }
         };
 
-        // `self` is the caller, `stack` is the completed recurisve call
+        // `self` is the caller, `stack` is the completed recursive call
         mem::swap(self, &mut stack);
 
         use TrailingMacro::{Exec, ModeSwitch, Unknown};
@@ -1092,33 +1102,31 @@ impl State {
                 match (
                     self.mode,
                     tm.truncate(self.processed.as_mut_vec()),
-                    self.locked.is_empty(),
-                    stack.locked.is_empty(),
+                    self.has_locking(),
+                    stack.has_locking(),
                 ) {
-                    (_, Mode::Eager, _, true) => {
+                    (_, Mode::Eager, _, false) => {
                         self.processed.append(stack.processed);
                     }
-                    (_, Mode::Eager, true, false) => {
-                        debug_assert!(self.free.is_empty());
+                    (_, Mode::Eager, false, true) => {
                         self.free.append(self.processed.take());
                         self.free.append(stack.free);
                         self.locked = stack.locked;
                         self.processed.append(stack.processed);
                     }
-                    (_, Mode::Eager, false, false) => {
+                    (_, Mode::Eager, true, true) => {
                         self.locked.append(self.processed.take());
                         self.locked.append(stack.locked);
                         self.processed.append(stack.processed);
                     }
 
-                    (Mode::Eager, Mode::Lazy, true, _) => {
-                        debug_assert!(self.free.is_empty());
+                    (Mode::Eager, Mode::Lazy, false, _) => {
                         self.free.append(self.processed.take());
                         self.free.append(stack.free);
                         self.locked = stack.locked;
                         self.locked.append(stack.processed);
                     }
-                    (Mode::Eager, Mode::Lazy, false, _) | (Mode::Lazy, Mode::Lazy, _, _) => {
+                    (Mode::Eager, Mode::Lazy, true, _) | (Mode::Lazy, Mode::Lazy, _, _) => {
                         self.locked.append(self.processed.take());
                         self.locked.append(stack.free);
                         self.locked.append(stack.locked);
