@@ -148,7 +148,7 @@ pub fn eager_macro_rules(stream: TokenStream) -> TokenStream {
         None => expand_rules(&found_crate_path, &eager_call_sigil, stream.into_iter()),
     };
 
-    #[cfg(feature = "debug")]
+    #[cfg(feature = "trace_macros")]
     proc_macro_error2::emit_call_site_warning!("eager_macro_rules output: {}", output);
 
     output

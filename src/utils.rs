@@ -161,7 +161,7 @@ pub fn expect_group<'a>(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match ident `${}:group`", g)),
         (Ok(TokenTree::Group(g)), Param::ExactValue(d)) if g.delimiter() == d => Ok(g),
-        (Ok(TokenTree::Group(g)), Param::Named(_)) => Ok(g),
+        (Ok(TokenTree::Group(g)), Param::Named(_)) if g.delimiter() != Delimiter::None => Ok(g),
         (Ok(tt), Param::ExactValue(d)) => Err(diagnostic!(
             tt,
             Level::Error,

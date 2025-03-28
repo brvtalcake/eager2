@@ -7,14 +7,14 @@ use crate::utils::*;
 pub fn eval(stream: TokenStream, eager: bool) -> TokenStream {
     let name = if eager { "eager" } else { "lazy" };
 
-    #[cfg(feature = "debug")]
+    #[cfg(feature = "trace_macros")]
     proc_macro_error2::emit_call_site_warning!("{} input: {}", name, stream);
 
     eval_helper(stream, eager, name)
 }
 
 pub fn eager_wrap(stream: TokenStream, name: &str) -> TokenStream {
-    #[cfg(feature = "debug")]
+    #[cfg(feature = "trace_macros")]
     proc_macro_error2::emit_call_site_warning!("{} input: {}", name, stream);
 
     let macro_name = Ident::new(name, Span::call_site());
@@ -51,7 +51,7 @@ fn eval_helper(stream: TokenStream, eager: bool, _name: &str) -> TokenStream {
         }
     };
 
-    #[cfg(feature = "debug")]
+    #[cfg(feature = "trace_macros")]
     proc_macro_error2::emit_call_site_warning!("{} output: {}", _name, output);
 
     output

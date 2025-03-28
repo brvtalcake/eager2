@@ -1,14 +1,12 @@
-use std::path::{self, Path, PathBuf};
-use std::str::FromStr;
-use std::{env, fs, mem};
+use std::mem;
 
 use proc_macro_error2::abort;
 use proc_macro_error2::{Diagnostic, ResultExt};
-use proc_macro2::{
-    Delimiter, Group, Ident, Literal, Spacing, Span, TokenStream, TokenTree, token_stream,
-};
+use proc_macro2::{Delimiter, Group, Ident, Spacing, Span, TokenStream, TokenTree, token_stream};
 use quote::{ToTokens, TokenStreamExt};
 
+use crate::egroup::{EfficientGroupT, EfficientGroupV};
+use crate::exec::ExecutableMacroType;
 use crate::utils::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -57,700 +55,27 @@ impl ToTokens for Mode {
     }
 }
 
-enum Stack {
-    Empty,
-    Raw(Group),
-    Processed(Box<State>, Option<TrailingMacro>),
-}
-
-impl Stack {
-    fn take(&mut self) -> Self {
-        mem::replace(self, Self::Empty)
-    }
-    fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty)
-    }
-}
-impl ToTokens for Stack {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        use Stack::*;
-        match self {
-            Empty => {
-                tokens.append(Group::new(Delimiter::Bracket, TokenStream::new()));
-            }
-            Raw(g) => g.to_tokens(tokens),
-            Processed(s, _) => s.to_tokens(tokens),
-        }
-    }
-}
-
-enum EfficientGroup<P> {
-    Raw(Group),
-    Processed(P),
-}
-
-impl<P: Default> Default for EfficientGroup<P> {
-    fn default() -> Self {
-        Self::Processed(P::default())
-    }
-}
-
-impl<P> From<Group> for EfficientGroup<P> {
-    fn from(g: Group) -> Self {
-        Self::Raw(g)
-    }
-}
-enum EgIntoIter<P: IntoIterator<Item = TokenTree>> {
-    Raw(token_stream::IntoIter),
-    Processed(P::IntoIter),
-}
-
-impl<P: IntoIterator<Item = TokenTree>> Clone for EgIntoIter<P>
-where
-    P::IntoIter: Clone,
-{
-    fn clone(&self) -> Self {
-        match self {
-            Self::Processed(p) => Self::Processed(p.clone()),
-            Self::Raw(g) => Self::Raw(g.clone()),
-        }
-    }
-}
-
-impl<P: IntoIterator<Item = TokenTree>> Iterator for EgIntoIter<P> {
-    type Item = TokenTree;
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Processed(p) => p.next(),
-            Self::Raw(g) => g.next(),
-        }
-    }
-}
-
-impl<P: IntoIterator<Item = TokenTree>> IntoIterator for EfficientGroup<P> {
-    type IntoIter = EgIntoIter<P>;
-    type Item = TokenTree;
-    fn into_iter(self) -> Self::IntoIter {
-        match self {
-            Self::Processed(p) => EgIntoIter::Processed(p.into_iter()),
-            Self::Raw(g) => EgIntoIter::Raw(g.stream().into_iter()),
-        }
-    }
-}
-
-type EfficientGroupT = EfficientGroup<TokenStream>;
-type EfficientGroupV = EfficientGroup<Vec<TokenTree>>;
-
-impl ToTokens for EfficientGroupT {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            Self::Raw(g) => g.to_tokens(tokens),
-            Self::Processed(s) => Group::new(Delimiter::Bracket, s.clone()).to_tokens(tokens),
-        }
-    }
-}
-impl ToTokens for EfficientGroupV {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            Self::Raw(g) => g.to_tokens(tokens),
-            Self::Processed(s) => {
-                Group::new(Delimiter::Bracket, s.iter().cloned().collect()).to_tokens(tokens)
-            }
-        }
-    }
-}
-
-impl EfficientGroupV {
-    fn push(&mut self, tt: TokenTree) {
-        self.as_mut_vec().push(tt)
-    }
-
-    fn as_mut_vec(&mut self) -> &mut Vec<TokenTree> {
-        if let Self::Raw(r) = self {
-            let v = r.stream().into_iter().collect();
-            *self = Self::Processed(v);
-        }
-
-        let Self::Processed(p) = self else {
-            unreachable!()
-        };
-        p
-    }
-    fn append_to_stream(&self, tokens: &mut TokenStream) {
-        match self {
-            Self::Processed(p) => tokens.append_all(p.iter().cloned()),
-            Self::Raw(g) => tokens.extend(g.stream()),
-        }
-    }
-    fn append(&mut self, other: Self) {
-        let v = self.as_mut_vec();
-        match other {
-            Self::Processed(mut p) => v.append(&mut p),
-            Self::Raw(g) => v.extend(g.stream()),
-        }
-    }
-    fn take(&mut self) -> Self {
-        mem::replace(self, Self::Processed(vec![]))
-    }
-}
-impl EfficientGroupT {
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::Processed(p) => p.is_empty(),
-            Self::Raw(g) => g.stream().is_empty(),
-        }
-    }
-    fn append_to_stream(&self, tokens: &mut TokenStream) {
-        match self {
-            Self::Processed(p) => tokens.extend(p.clone()),
-            Self::Raw(g) => tokens.extend(g.stream()),
-        }
-    }
-    fn into_stream(self) -> TokenStream {
-        match self {
-            Self::Processed(p) => p,
-            Self::Raw(g) => g.stream(),
-        }
-    }
-    fn as_mut_stream(&mut self) -> &mut TokenStream {
-        if let Self::Raw(r) = self {
-            *self = Self::Processed(r.stream());
-        }
-
-        let Self::Processed(p) = self else {
-            unreachable!()
-        };
-        p
-    }
-    fn append<P>(&mut self, other: EfficientGroup<P>)
-    where
-        P: IntoIterator<Item = TokenTree>,
-    {
-        let s = self.as_mut_stream();
-        match other {
-            EfficientGroup::Processed(p) => s.append_all(p),
-            EfficientGroup::Raw(g) => s.append_all(g.stream()),
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ExecutableMacroType {
-    CompileError,
-    Concat,
-    Env,
-    Include,
-    IncludeStr,
-    Stringify,
-
-    CCase,
-    EagerIf,
-    TokenEq,
-    Unstringify,
-}
-
-impl TryFrom<&str> for ExecutableMacroType {
-    type Error = ();
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Ok(match value {
-            "compile_error" => Self::CompileError,
-            "concat" => Self::Concat,
-            "env" => Self::Env,
-            "include" => Self::Include,
-            "include_str" => Self::IncludeStr,
-            "stringify" => Self::Stringify,
-
-            "ccase" => Self::CCase,
-            "eager_if" => Self::EagerIf,
-            "token_eq" => Self::TokenEq,
-            "unstringify" => Self::Unstringify,
-
-            _ => return Err(()),
-        })
-    }
-}
-
-fn execute_env(
-    span: Span,
-    stream: impl IntoIterator<Item = TokenTree>,
-    processed_out: &mut EfficientGroupV,
-) {
-    let mut args = stream.into_iter();
-    let key = expect_string_literal(Ok(args.next().unwrap())).unwrap_or_abort();
-    args.next()
-        .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
-    let error = args
-        .next()
-        .map(|tt| expect_string_literal(Ok(tt)).unwrap_or_abort());
-    if args.next().is_some() {
-        abort!(span, "`env!()` takes 1 or 2 arguments")
-    }
-
-    let value = match (env::var(&key[1..key.len() - 1]), error) {
-        (Ok(value), _) => value,
-        (Err(_), Some(error)) => abort!(span, "{}", error),
-        (Err(env::VarError::NotPresent), None) => abort!(
-            span,
-            "environment variable `{}` not defined at compile time",
-            key
-        ),
-        (Err(env::VarError::NotUnicode(_)), None) => abort!(
-            span,
-            "environment variable `{}` was present but not unicode at compile time",
-            key
-        ),
-    };
-    processed_out.push(TokenTree::Literal(Literal::string(&value)));
-}
-fn execute_stringify(
-    stream: impl IntoIterator<Item = TokenTree>,
-    processed_out: &mut EfficientGroupV,
-) {
-    let s = TokenStream::from_iter(stream).to_string();
-    processed_out.push(TokenTree::Literal(Literal::string(&s)));
-}
-fn execute_concat(
-    stream: impl IntoIterator<Item = TokenTree>,
-    processed_out: &mut EfficientGroupV,
-) {
-    let mut buffer = String::new();
-    let mut args = stream.into_iter();
-    while let Some(tt) = args.next() {
-        let i = expect_ident(Ok(tt.clone()), "true");
-        let l = expect_literal(Ok(tt), Param::Named("arg"));
-
-        match (i, l) {
-            (_, Ok(l)) => {
-                let s = l.to_string();
-                if s.starts_with('"') && s.ends_with('"') {
-                    buffer += &s[1..s.len() - 1];
-                } else {
-                    buffer += &s;
-                }
-            }
-            (Ok(i), _) => buffer += &i.to_string(),
-            (_, Err(e)) => e.abort(),
-        }
-        args.next()
-            .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
-    }
-    processed_out.push(TokenTree::Literal(Literal::string(&buffer)));
-}
-
-fn include_helper(span: Span, stream: impl IntoIterator<Item = TokenTree>) -> String {
-    let mut args = stream.into_iter();
-    let string = args.next();
-    let string_span = string.as_ref().map(|v| v.span());
-    let string = expect_string_literal(string.ok_or(span)).unwrap_or_abort();
-    let string_span = string_span.unwrap();
-    args.next()
-        .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
-
-    let mut path = Path::new(&string[1..string.len() - 1]);
-    if path.is_relative() {
-        abort!(
-            string_span,
-            "relative path is not supported here; use `include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), ...))"
-        )
-    }
-
-    // Make Windows verbatim paths work even with mixed path separators, which
-    // can happen when a path is produced using `concat!`.
-    let path_buf: PathBuf;
-    if let Some(path::Component::Prefix(prefix)) = path.components().next() {
-        if prefix.kind().is_verbatim() {
-            path_buf = path.components().collect();
-            path = &path_buf;
-        }
-    }
-
-    match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(err) => abort!(span, "Couldn't read {}: {:?}", path.display(), err),
-    }
-}
-
-fn execute_include(
-    span: Span,
-    stream: impl IntoIterator<Item = TokenTree>,
-    unprocessed: &mut Vec<token_stream::IntoIter>,
-) {
-    let content = include_helper(span, stream);
-    let parsed = TokenStream::from_str(&content).unwrap();
-
-    #[cfg(feature = "debug")]
-    proc_macro_error2::emit_call_site_warning!("include result:{}", parsed);
-
-    unprocessed.push(parsed.into_iter());
-}
-
-fn execute_include_str(
-    span: Span,
-    stream: impl IntoIterator<Item = TokenTree>,
-    processed_out: &mut EfficientGroupV,
-) {
-    let content = include_helper(span, stream);
-    let string = Literal::string(&content[1..content.len() - 1]);
-
-    processed_out.push(string.into());
-}
-
-fn execute_compile_error(span: Span, stream: impl IntoIterator<Item = TokenTree>) {
-    abort!(span, "{}", TokenStream::from_iter(stream));
-}
-
-fn execute_ccase(
-    span: Span,
-    stream: impl IntoIterator<Item = TokenTree>,
-    processed_out: &mut EfficientGroupV,
-) {
-    use convert_case::{Boundary, Case, Casing, Converter, pattern::Pattern};
-
-    let mut args = stream.into_iter();
-
-    let input = expect_ident_or_string(args.next().ok_or(span)).unwrap_or_abort();
-    expect_punct(args.next().ok_or(span), ',').unwrap_or_abort();
-
-    let [mut from, mut boundaries, mut to, mut pattern, mut delimeter] =
-        [const { Option::<(Ident, Span, String)>::None }; 5];
-    while let Some(tt) = args.next() {
-        let arg_name = expect_ident(Ok(tt), Param::Named("arg_name")).unwrap_or_abort();
-        let dest = if arg_name == "f" || arg_name == "from" {
-            &mut from
-        } else if arg_name == "b" || arg_name == "boundaries" {
-            &mut boundaries
-        } else if arg_name == "t" || arg_name == "to" {
-            &mut to
-        } else if arg_name == "p" || arg_name == "pattern" {
-            &mut pattern
-        } else if arg_name == "d" || arg_name == "delimeter" {
-            &mut delimeter
-        } else {
-            abort!(
-                arg_name,
-                "expected ident one of [`f`, `from`, `b`, `boundaries`, `t`, `to`, `p`, `pattern`, `d`, `delimeter`]"
-            );
-        };
-        if let Some(dest) = dest.as_ref() {
-            abort!(arg_name, "duplicate arg_name";
-                note = dest.0.span() => "previous found here");
-        }
-
-        expect_punct(args.next().ok_or(span), ':').unwrap_or_abort();
-        let arg_val = args.next();
-        let arg_span = arg_val.as_ref().map(|v| v.span());
-        let arg_val = expect_string_literal(arg_val.ok_or(span)).unwrap_or_abort();
-        let arg_span = arg_span.unwrap();
-        args.next()
-            .map(|tt| expect_punct(Ok(tt), ',').unwrap_or_abort());
-
-        *dest = Some((
-            arg_name,
-            arg_span,
-            arg_val[1..arg_val.len() - 1].to_string(),
-        ));
-    }
-
-    const ALL_CASES: &[(&str, Case)] = &{
-        [
-            ("snake", Case::Snake),
-            ("constant", Case::Constant),
-            ("uppersnake", Case::UpperSnake),
-            ("ada", Case::Ada),
-            ("kebab", Case::Kebab),
-            ("cobol", Case::Cobol),
-            ("upperkebab", Case::UpperKebab),
-            ("train", Case::Train),
-            ("flat", Case::Flat),
-            ("upperflat", Case::UpperFlat),
-            ("pascal", Case::Pascal),
-            ("uppercamel", Case::UpperCamel),
-            ("camel", Case::Camel),
-            ("lower", Case::Lower),
-            ("upper", Case::Upper),
-            ("title", Case::Title),
-            ("sentence", Case::Sentence),
-            ("alternating", Case::Alternating),
-            ("toggle", Case::Toggle),
-            ("screaming", Case::Constant),
-            ("alternate", Case::Alternating),
-        ]
-    };
-
-    fn case_value_parser(span: Span, s: &str) -> Case {
-        let case_str = s.to_case(Case::Flat);
-        for (name, case) in ALL_CASES {
-            if case_str == *name {
-                return *case;
-            }
-        }
-        abort!(
-            span,
-            "'{}' is not a valid case.  See documentation for a list of cases.",
-            s
-        );
-    }
-    const ALL_PATTERNS: &[(&str, Pattern)] = &{
-        use convert_case::pattern;
-        [
-            ("uppercase", pattern::uppercase),
-            ("lowercase", pattern::lowercase),
-            ("capital", pattern::capital),
-            ("camel", pattern::camel),
-            ("toggle", pattern::toggle),
-            ("alternating", pattern::alternating),
-            ("sentence", pattern::sentence),
-        ]
-    };
-
-    fn pattern_value_parser(span: Span, s: &str) -> Pattern {
-        let pattern_str = s.to_case(Case::Flat);
-        for pattern in ALL_PATTERNS {
-            let pattern_in_flat = pattern.0.to_case(Case::Flat);
-            if pattern_str == pattern_in_flat {
-                return pattern.1;
-            }
-        }
-        abort!(
-            span,
-            "'{}' is not a valid pattern.  See documentation for list of patterns.",
-            s
-        );
-    }
-
-    match (
-        from.as_ref(),
-        boundaries.as_ref(),
-        to.as_ref(),
-        pattern.as_ref(),
-        delimeter.as_ref(),
-    ) {
-        (Some((a, _, _)), Some((b, _, _)), _, _, _)
-        | (_, _, Some((a, _, _)), Some((b, _, _)), _)
-        | (_, _, Some((a, _, _)), _, Some((b, _, _))) => {
-            abort!(a.span(), "arg conflicts with other arg";
-                note = b.span() => "other arg" )
-        }
-        (_, _, _, None, Some((d, _, _))) => {
-            abort!(d.span(), "`delimeter` requires missing argument `pattern`";
-                note = span => "missing arg `pattern`")
-        }
-        (_, _, None, None, _) => abort!(span, "missing argument `to` or `pattern`"),
-        _ => {}
-    }
-
-    // TODO: check args
-    let mut conv = Converter::new();
-    if let Some((_, _, boundaries)) = boundaries {
-        debug_assert!(from.is_none());
-        let boundaries = Boundary::defaults_from(boundaries.as_str());
-        conv = conv.set_boundaries(&boundaries);
-    }
-    if let Some((_, span, from)) = from {
-        conv = conv.from_case(case_value_parser(span, &from));
-    }
-    if let Some((_, _, delimeter)) = delimeter {
-        debug_assert!(pattern.is_some());
-        // --delimeter
-        conv = conv.set_delim(delimeter);
-    }
-    if let Some((_, span, pattern)) = pattern {
-        debug_assert!(to.is_none());
-        conv = conv.set_pattern(pattern_value_parser(span, &pattern));
-    }
-    if let Some((_, span, to)) = to {
-        conv = conv.to_case(case_value_parser(span, &to));
-    }
-    let result = match input {
-        Ok(ident) => {
-            let result = conv.convert(ident.to_string());
-            // Parse to error check
-            let tokens: Vec<_> = TokenStream::from_str(&result)
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
-            match tokens.as_slice() {
-                [ident @ TokenTree::Ident(_)] => ident.clone(),
-                _ => abort!(span, "`{}` is not a valid identifier", result),
-            }
-        }
-        Err(string) => {
-            let result = conv.convert(&string[1..string.len() - 1]);
-            Literal::string(&result).into()
-        }
-    };
-    processed_out.push(result);
-}
-
-fn execute_token_eq(
-    span: Span,
-    stream: impl IntoIterator<Item = TokenTree>,
-    processed_out: &mut EfficientGroupV,
-) {
-    let mut args = stream.into_iter();
-    struct TtWrapper(TokenTree);
-    impl PartialEq for TtWrapper {
-        fn eq(&self, other: &Self) -> bool {
-            match (
-                eat_zero_group(self.0.clone()),
-                eat_zero_group(other.0.clone()),
-            ) {
-                (TokenTree::Group(a), TokenTree::Group(b)) => group_eq(&a, &b),
-                (TokenTree::Ident(a), TokenTree::Ident(b)) => a == b,
-                (TokenTree::Punct(a), TokenTree::Punct(b)) => a.as_char() == b.as_char(),
-                (TokenTree::Literal(a), TokenTree::Literal(b)) => a.to_string() == b.to_string(),
-                _ => false,
-            }
-        }
-    }
-    fn stream_eq(a: TokenStream, b: TokenStream) -> bool {
-        a.is_empty() == b.is_empty()
-            && a.into_iter()
-                .map(TtWrapper)
-                .eq(b.into_iter().map(TtWrapper))
-    }
-    fn group_eq(a: &Group, b: &Group) -> bool {
-        a.delimiter() == b.delimiter() && stream_eq(a.stream(), b.stream())
-    }
-
-    let mut prev = None;
-    for i in 0.. {
-        let name = format!("arg_{}", i);
-        let next = expect_group(args.next().ok_or(span), Param::Named(&name)).unwrap_or_abort();
-        if let Some(prev) = prev.take() {
-            if !group_eq(&prev, &next) {
-                processed_out.push(Ident::new("false", span).into());
-                return;
-            }
-        }
-        prev = Some(next);
-
-        if let Some(comma) = args.next() {
-            expect_punct(Ok(comma), ',').unwrap_or_abort();
-        } else {
-            break;
-        }
-    }
-    processed_out.push(Ident::new("true", span).into());
-}
-
-fn execute_eager_if(
-    span: Span,
-    stream: impl IntoIterator<Item = TokenTree>,
-    unprocessed: &mut Vec<token_stream::IntoIter>,
-) {
-    let mut args = stream.into_iter();
-
-    let check = expect_ident(args.next().ok_or(span), Param::Named("check")).unwrap_or_abort();
-    if args.next().is_some() {
-        abort!(span, "`eager_if!()` takes 1 argument")
-    }
-
-    let check = if check == "true" {
-        true
-    } else if check == "false" {
-        false
-    } else {
-        abort!(check, "expected either token `true` or token `false");
-    };
-
-    fn get_one(unprocessed: &mut Vec<token_stream::IntoIter>) -> Option<TokenTree> {
-        while let Some(stream) = unprocessed.last_mut() {
-            if let Some(tt) = stream.next() {
-                return Some(tt);
-            }
-            unprocessed.pop();
-        }
-        None
-    }
-
-    let true_case =
-        expect_group(get_one(unprocessed).ok_or(span), Param::Named("true_case")).unwrap_or_abort();
-
-    let false_case = expect_group(get_one(unprocessed).ok_or(span), Param::Named("false_case"))
-        .unwrap_or_abort();
-
-    let output = if check { true_case } else { false_case }.stream();
-
-    unprocessed.push(output.into_iter());
-}
-
-fn execute_unstringify(
-    span: Span,
-    stream: impl IntoIterator<Item = TokenTree>,
-    unprocessed: &mut Vec<token_stream::IntoIter>,
-) {
-    let mut args = stream.into_iter();
-    let string = expect_string_literal(args.next().ok_or(span)).unwrap_or_abort();
-    args.next()
-        .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
-
-    let unstrung = TokenStream::from_str(&string[1..string.len() - 1]).unwrap();
-
-    #[cfg(feature = "debug")]
-    proc_macro_error2::emit_call_site_warning!("unstringify result:{}", unstrung);
-
-    unprocessed.push(unstrung.into_iter())
-}
-
-impl ExecutableMacroType {
-    fn execute(
-        self,
-        span: Span,
-        stream: impl Clone + IntoIterator<Item = TokenTree>,
-        state: &mut State,
-    ) {
-        #[cfg(feature = "debug")]
-        proc_macro_error2::emit_call_site_warning!(
-            "executing {:?}: {}",
-            self,
-            TokenStream::from_iter(stream.clone())
-        );
-
-        match self {
-            Self::Concat => {
-                execute_concat(stream, &mut state.processed);
-            }
-            Self::Env => {
-                execute_env(span, stream, &mut state.processed);
-            }
-            Self::Stringify => {
-                execute_stringify(stream, &mut state.processed);
-            }
-            Self::Include => {
-                execute_include(span, stream, &mut state.unprocessed);
-            }
-            Self::IncludeStr => {
-                execute_include_str(span, stream, &mut state.processed);
-            }
-            Self::CompileError => {
-                execute_compile_error(span, stream);
-            }
-
-            Self::CCase => {
-                execute_ccase(span, stream, &mut state.processed);
-            }
-            Self::TokenEq => {
-                execute_token_eq(span, stream, &mut state.processed);
-            }
-            Self::EagerIf => {
-                execute_eager_if(span, stream, &mut state.unprocessed);
-            }
-            Self::Unstringify => {
-                execute_unstringify(span, stream, &mut state.unprocessed);
-            }
-        }
-    }
-}
-
 enum MacroType {
     ModeSwitch(Mode),
     Exec(ExecutableMacroType),
+    Ignore,
     Unknown,
 }
 
 impl MacroType {
     fn try_new(found_crate: &str, tokens: &[TokenTree], mode_only: bool) -> Option<Self> {
+        fn token_is(tt: &TokenTree, s: &str) -> bool {
+            let TokenTree::Ident(i) = tt else {
+                unreachable!()
+            };
+            i == s
+        }
+        fn tokens_are<'a>(
+            tokens: &[TokenTree],
+            i: impl IntoIterator<Item = (usize, &'a str)>,
+        ) -> bool {
+            i.into_iter().all(|(i, s)| token_is(&tokens[i], s))
+        }
         fn get_token_string(tt: &TokenTree) -> String {
             let TokenTree::Ident(i) = tt else {
                 unreachable!()
@@ -758,37 +83,60 @@ impl MacroType {
             i.to_string()
         }
 
-        let token_string = match tokens.len() {
+        enum CrateIndex {
+            NoCrate,
+            DollarCrate,
+            Index(usize),
+        }
+        use CrateIndex::*;
+
+        let crate_i = match tokens.len() {
             // Zero isn't enough
             // One token is just a `!` which isn't enough
             0 | 1 => return None,
 
             // e.g. [`eager`, `!`]
-            2 => get_token_string(&tokens[0]),
+            2 => NoCrate,
 
             // e.g. [`eager2`, `:`, `:`, `eager`, `!`]
-            5 => match get_token_string(&tokens[0]).as_str() {
-                "crate" => get_token_string(&tokens[3]),
-                c if c == found_crate => get_token_string(&tokens[3]),
-                _ => return None,
-            },
-            // e.g. [`$`, `crate`, `:`, `:`, `eager`, `!`]
-            6 => match get_token_string(&tokens[1]).as_str() {
-                "crate" => get_token_string(&tokens[4]),
-                _ => return None,
-            },
+            5 => Index(0),
             // e.g. [`:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
-            7 => match get_token_string(&tokens[2]).as_str() {
-                c if c == found_crate => get_token_string(&tokens[5]),
-                _ => return None,
-            },
+            7 => Index(2),
+            // e.g. [`$`, `crate`, `:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
+            9 if tokens_are(&tokens, [(1, "crate"), (5, "eager2")]) => DollarCrate,
             _ if mode_only => return None,
             _ => return Some(Self::Unknown),
         };
-        let token_string = token_string.as_str();
+
+        enum IgnoreMode {
+            Dont,
+            Prelude,
+            Std,
+            Core,
+            Alloc,
+        }
+
+        let (ignore, exec) = match crate_i {
+            // e.g. [`eager`, `!`]
+            NoCrate => (IgnoreMode::Prelude, true),
+
+            // e.g. [`$`, `crate`, `:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
+            DollarCrate => (IgnoreMode::Dont, true),
+
+            // e.g. [`eager2`, `:`, `:`, `eager`, `!`]
+            // e.g. [`:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
+            Index(i) if token_is(&tokens[i], found_crate) => (IgnoreMode::Dont, true),
+            Index(i) if token_is(&tokens[i], "std") => (IgnoreMode::Std, false),
+            Index(i) if token_is(&tokens[i], "core") => (IgnoreMode::Core, false),
+            Index(i) if token_is(&tokens[i], "alloc") => (IgnoreMode::Alloc, false),
+            Index(_) => return None,
+        };
+
+        let macro_name = get_token_string(&tokens[tokens.len() - 2]);
+        let macro_name = macro_name.as_str();
 
         // Try mode first
-        if let Ok(mode) = token_string.try_into() {
+        if let Ok(mode) = macro_name.try_into() {
             return Some(Self::ModeSwitch(mode));
         }
         // Stop if we're limited to mode only
@@ -796,8 +144,41 @@ impl MacroType {
             return None;
         }
 
-        if let Ok(exec) = token_string.try_into() {
-            return Some(Self::Exec(exec));
+        // Try exec
+        if exec {
+            if let Ok(exec) = macro_name.try_into() {
+                return Some(Self::Exec(exec));
+            }
+        }
+        // Try ignore
+        match (ignore, macro_name) {
+            (IgnoreMode::Dont, _) => {}
+            (
+                IgnoreMode::Prelude | IgnoreMode::Std | IgnoreMode::Core,
+                "assert" | "assert_eq" | "assert_new" | "debug_assert" | "debug_assert_eq"
+                | "debug_assert_ne" | "format_args" | "matches" | "panic" | "todo" | "try"
+                | "unimplemented" | "unreachable" | "write" | "writeln",
+            )
+            | (
+                IgnoreMode::Std | IgnoreMode::Core,
+                "cfg" | "column" | "compile_error" | "concat" | "env" | "file" | "include"
+                | "include_bytes" | "include_str" | "line" | "module_path" | "option_env"
+                | "stringify",
+            )
+            | (
+                IgnoreMode::Prelude | IgnoreMode::Std,
+                "dbg"
+                | "eprint"
+                | "eprintln"
+                | "is_x86_feature_detected"
+                | "print"
+                | "println"
+                | "thread_local",
+            ) => return Some(Self::Ignore),
+            (IgnoreMode::Prelude | IgnoreMode::Std | IgnoreMode::Alloc, "format" | "vec") => {
+                return Some(Self::Ignore);
+            }
+            _ => {}
         }
 
         Some(Self::Unknown)
@@ -878,6 +259,7 @@ impl TrailingMacro {
                 MacroType::Exec(exec) => {
                     TrailingMacro::Exec(ExecutableTrailingMacro { offset: i, exec })
                 }
+                MacroType::Ignore => return None,
                 MacroType::Unknown => TrailingMacro::Unknown(UnknownTrailingMacro { offset: i }),
             },
         )
@@ -913,6 +295,32 @@ pub struct MacroPath {
 impl ToTokens for MacroPath {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.append_all(self.segments.iter())
+    }
+}
+enum Stack {
+    Empty,
+    Raw(Group),
+    Processed(Box<State>, Option<TrailingMacro>),
+}
+
+impl Stack {
+    fn take(&mut self) -> Self {
+        mem::replace(self, Self::Empty)
+    }
+    fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+}
+impl ToTokens for Stack {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        use Stack::*;
+        match self {
+            Empty => {
+                tokens.append(Group::new(Delimiter::Bracket, TokenStream::new()));
+            }
+            Raw(g) => g.to_tokens(tokens),
+            Processed(s, _) => s.to_tokens(tokens),
+        }
     }
 }
 
@@ -1060,7 +468,7 @@ impl State {
 
                 let inner_mode = tm.as_ref().and_then(|tm| tm.mode()).unwrap_or(self.mode);
 
-                #[cfg(feature = "debug")]
+                #[cfg(feature = "trace_macros")]
                 proc_macro_error2::emit_call_site_warning!(
                     "processing with mode {:?}: {}",
                     inner_mode,
@@ -1143,7 +551,12 @@ impl State {
                     .chain(stack.locked)
                     .chain(stack.processed);
 
-                macro_type.execute(stack.span, stream, self)
+                macro_type.execute(
+                    stack.span,
+                    stream,
+                    &mut self.processed,
+                    &mut self.unprocessed,
+                )
             }
             // Hand over execution to unknown macros if in eager mode
             (Some(Unknown(tm)), Mode::Eager) => {
@@ -1161,7 +574,7 @@ impl State {
                 let stream = stack.free.into_stream();
                 let group = Group::new(stack.delim, stream);
 
-                #[cfg(feature = "debug")]
+                #[cfg(feature = "trace_macros")]
                 proc_macro_error2::emit_call_site_warning!("finished_processing {}", group);
 
                 self.processed.push(TokenTree::Group(group));

@@ -1,7 +1,7 @@
 //!
 //! This crate contains three main macros used to simulate eager macro expansion:
 //!
-//! * [`eager!`]: Eagerly expands any macro in its body.
+//! * [`eager!`]: Attempts to eagerly expands every macro invocation in its body.
 //! * [`eager_macro_rules!`]: Used to declare macro that can be eagerly expanded with `eager!`.
 //! * [`lazy!`]: Used in `eager!` to revert to lazy macro expansion.
 //!
@@ -26,6 +26,8 @@
 
 use proc_macro_error2::proc_macro_error;
 
+mod egroup;
+mod exec;
 mod impls;
 mod rules;
 mod state;
@@ -140,7 +142,7 @@ pub fn eager_macro_rules(stream: proc_macro::TokenStream) -> proc_macro::TokenSt
 /// `#![recursion_limit="256"]` or higher.
 ///
 /// * Debugging an eagerly expanded macro can be quite difficult. [`compile_error!`] can sometimes
-/// be helpful in this regard. This crate also has `debug` feature which only operates on `nightly`,
+/// be helpful in this regard. This crate also has `trace_macros` feature which only operates on `nightly`,
 /// and can be quite verbose. Contributions to improve this are very welcome.
 ///
 /// * Only `eager!`-enabled macros can be eagerly expanded, so existing macros do not gain much.

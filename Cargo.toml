@@ -25,4 +25,4 @@ proc-macro2 = "1"
 quote = "1"
 
 [features]
-debug = ["proc-macro-error2/nightly"]
+trace_macros = ["proc-macro-error2/nightly"]
