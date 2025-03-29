@@ -1,12 +1,12 @@
 use std::fmt::Write;
 use std::path::{self, Path, PathBuf};
 use std::str::FromStr;
-use std::{env, fs};
+use std::{env, fs, io};
 
 use litrs::{BoolLit, Literal as Litrl};
 use proc_macro_error2::ResultExt;
 use proc_macro_error2::abort;
-use proc_macro2::{Group, Ident, Literal, Span, TokenStream, TokenTree, token_stream};
+use proc_macro2::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree, token_stream};
 
 use crate::egroup::EfficientGroupV;
 use crate::utils::*;
@@ -17,7 +17,9 @@ pub enum ExecutableMacroType {
     Concat,
     Env,
     Include,
+    IncludeBytes,
     IncludeStr,
+    OptionEnv,
     Stringify,
 
     CCase,
@@ -34,7 +36,9 @@ impl TryFrom<&str> for ExecutableMacroType {
             "concat" => Self::Concat,
             "env" => Self::Env,
             "include" => Self::Include,
+            "include_bytes" => Self::IncludeBytes,
             "include_str" => Self::IncludeStr,
+            "option_env" => Self::OptionEnv,
             "stringify" => Self::Stringify,
 
             "ccase" => Self::CCase,
@@ -63,6 +67,10 @@ impl ExecutableMacroType {
         );
 
         match self {
+            Self::CompileError => {
+                execute_compile_error(span, stream);
+            }
+
             Self::Concat => {
                 execute_concat(span, stream, processed);
             }
@@ -75,11 +83,14 @@ impl ExecutableMacroType {
             Self::Include => {
                 execute_include(span, stream, unprocessed);
             }
+            Self::IncludeBytes => {
+                execute_include_bytes(span, stream, processed);
+            }
             Self::IncludeStr => {
                 execute_include_str(span, stream, processed);
             }
-            Self::CompileError => {
-                execute_compile_error(span, stream);
+            Self::OptionEnv => {
+                execute_option_env(span, stream, processed);
             }
 
             Self::CCase => {
@@ -98,7 +109,7 @@ impl ExecutableMacroType {
     }
 }
 
-pub fn execute_env(
+fn execute_env(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
@@ -131,7 +142,37 @@ pub fn execute_env(
     processed_out.push(TokenTree::Literal(Literal::string(&value)));
 }
 
-pub fn execute_stringify(
+fn execute_option_env(
+    span: Span,
+    stream: impl IntoIterator<Item = TokenTree>,
+    processed_out: &mut EfficientGroupV,
+) {
+    let mut args = stream.into_iter();
+    let (key, _) = expect_string_literal(args.next_or(span), Param::Named("key")).unwrap_or_abort();
+    args.next()
+        .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
+    if args.next().is_some() {
+        abort!(span, "`option_env!()` takes 1 argument")
+    }
+
+    match env::var(&key) {
+        Err(env::VarError::NotUnicode(_)) => abort!(
+            span,
+            "environment variable `{}` was present but not unicode at compile time",
+            key
+        ),
+        Ok(value) => {
+            let val = TokenTree::Literal(Literal::string(&value));
+            let some = Ident::new("Some", span);
+            let group = Group::new(Delimiter::Parenthesis, val.into());
+            processed_out.push(some.into());
+            processed_out.push(group.into());
+        }
+        Err(env::VarError::NotPresent) => processed_out.push(Ident::new("None", span).into()),
+    };
+}
+
+fn execute_stringify(
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
 ) {
@@ -139,7 +180,7 @@ pub fn execute_stringify(
     processed_out.push(TokenTree::Literal(Literal::string(&s)));
 }
 
-pub fn execute_concat(
+fn execute_concat(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
@@ -147,10 +188,9 @@ pub fn execute_concat(
     let mut buffer = String::new();
     let mut args = stream.into_iter();
     while let Some(tt) = args.next() {
-        
         let (tt, neg) = match expect_punct(Ok(tt.clone()), '-') {
             Ok(_) => (args.next_or(span), true),
-            Err(_) => (Ok(tt), false)
+            Err(_) => (Ok(tt), false),
         };
 
         let (l, span) = expect_literal(tt, Param::Named("arg")).unwrap_or_abort();
@@ -159,28 +199,40 @@ pub fn execute_concat(
         }
 
         match (neg, l) {
-            (_, Litrl::Byte(_) | Litrl::ByteString(_)) => abort!(span, "cannot concatenate a byte string literal"),
+            (_, Litrl::Byte(_) | Litrl::ByteString(_)) => {
+                abort!(span, "cannot concatenate a byte string literal")
+            }
             (false, Litrl::Bool(BoolLit::False)) => buffer.push_str("false"),
             (false, Litrl::Bool(BoolLit::True)) => buffer.push_str("true"),
             (_, Litrl::Float(f)) => {
                 for s in f.number_part().split('_') {
                     buffer.push_str(s)
                 }
-            },
+            }
             (false, Litrl::Char(c)) => buffer.push(c.value()),
             (false, Litrl::String(s)) => buffer.push_str(s.value()),
             (_, Litrl::Integer(i)) => {
                 use litrs::IntegerBase::*;
                 match (i.base(), i.suffix()) {
-                    (Decimal, "f32" | "f64" | "" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128") => {
+                    (
+                        Decimal,
+                        "f32" | "f64" | "" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8"
+                        | "i16" | "i32" | "i64" | "i128",
+                    ) => {
                         for s in i.raw_main_part().split('_') {
                             buffer.push_str(s)
                         }
-                    },
-                    (Binary, "f32" | "f64") => abort!(span, "binary float literal is not supported"),
+                    }
+                    (Binary, "f32" | "f64") => {
+                        abort!(span, "binary float literal is not supported")
+                    }
                     (Octal, "f32" | "f64") => abort!(span, "octal float literal is not supported"),
 
-                    (_, "" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128") => {
+                    (
+                        _,
+                        "" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32"
+                        | "i64" | "i128",
+                    ) => {
                         let Some(v) = i.value::<u128>() else {
                             abort!(span, "integer literal is too large";
                                 note = "value exceeds limit of `0xffffffffffffffffffffffffffffffff`")
@@ -188,11 +240,10 @@ pub fn execute_concat(
                         write!(&mut buffer, "{v}").unwrap();
                     }
                     (_, s) => abort!(span, "invalid suffix `{}` for number literal", s),
-
                 }
             }
             _ => abort!(span, "expected a literal";
-                    note = r#"only literals (like `"foo"`, `-42` and `3.14`) can be passed to `concat!()`"#)
+                    note = r#"only literals (like `"foo"`, `-42` and `3.14`) can be passed to `concat!()`"#),
         }
         args.next()
             .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
@@ -200,9 +251,14 @@ pub fn execute_concat(
     processed_out.push(TokenTree::Literal(Literal::string(&buffer)));
 }
 
-fn include_helper(span: Span, stream: impl IntoIterator<Item = TokenTree>) -> String {
+fn include_helper<R: 'static>(
+    span: Span,
+    stream: impl IntoIterator<Item = TokenTree>,
+    f: impl FnOnce(&Path) -> io::Result<R>,
+) -> R {
     let mut args = stream.into_iter();
-    let (file, file_span) = expect_string_literal(args.next_or(span), Param::Named("file")).unwrap_or_abort();
+    let (file, file_span) =
+        expect_string_literal(args.next_or(span), Param::Named("file")).unwrap_or_abort();
     args.next()
         .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
 
@@ -224,18 +280,18 @@ fn include_helper(span: Span, stream: impl IntoIterator<Item = TokenTree>) -> St
         }
     }
 
-    match fs::read_to_string(path) {
+    match f(path) {
         Ok(content) => content,
         Err(err) => abort!(span, "Couldn't read {}: {:?}", path.display(), err),
     }
 }
 
-pub fn execute_include(
+fn execute_include(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     unprocessed: &mut Vec<token_stream::IntoIter>,
 ) {
-    let content = include_helper(span, stream);
+    let content = include_helper(span, stream, |p| fs::read_to_string(p));
     let parsed = TokenStream::from_str(&content).unwrap();
 
     #[cfg(feature = "trace_macros")]
@@ -244,18 +300,29 @@ pub fn execute_include(
     unprocessed.push(parsed.into_iter());
 }
 
-pub fn execute_include_str(
+fn execute_include_str(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
 ) {
-    let content = include_helper(span, stream);
-    let string = Literal::string(&content[1..content.len() - 1]);
+    let content = include_helper(span, stream, |p| fs::read_to_string(p));
+    let string = Literal::string(&content);
 
     processed_out.push(string.into());
 }
 
-pub fn execute_compile_error(span: Span, stream: impl IntoIterator<Item = TokenTree>) {
+fn execute_include_bytes(
+    span: Span,
+    stream: impl IntoIterator<Item = TokenTree>,
+    processed_out: &mut EfficientGroupV,
+) {
+    let content = include_helper(span, stream, |p| fs::read_to_string(p));
+    let string = Literal::string(&content);
+
+    processed_out.push(string.into());
+}
+
+fn execute_compile_error(span: Span, stream: impl IntoIterator<Item = TokenTree>) {
     let mut args = stream.into_iter();
     let (msg, _) = expect_string_literal(args.next_or(span), Param::Named("msg")).unwrap_or_abort();
     args.next()
@@ -267,7 +334,7 @@ pub fn execute_compile_error(span: Span, stream: impl IntoIterator<Item = TokenT
     abort!(span, "{}", msg);
 }
 
-pub fn execute_ccase(
+fn execute_ccase(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
@@ -305,15 +372,12 @@ pub fn execute_ccase(
         }
 
         expect_punct(args.next().ok_or(span), ':').unwrap_or_abort();
-        let (arg_val, arg_span) = expect_string_literal(args.next_or(span), Param::Named("val")).unwrap_or_abort();
+        let (arg_val, arg_span) =
+            expect_string_literal(args.next_or(span), Param::Named("val")).unwrap_or_abort();
         args.next()
             .map(|tt| expect_punct(Ok(tt), ',').unwrap_or_abort());
 
-        *dest = Some((
-            arg_name,
-            arg_span,
-            arg_val,
-        ));
+        *dest = Some((arg_name, arg_span, arg_val));
     }
 
     const ALL_CASES: &[(&str, Case)] = &{
@@ -447,7 +511,7 @@ pub fn execute_ccase(
     processed_out.push(result);
 }
 
-pub fn execute_token_eq(
+fn execute_token_eq(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
@@ -499,7 +563,7 @@ pub fn execute_token_eq(
     processed_out.push(Ident::new("true", span).into());
 }
 
-pub fn execute_eager_if(
+fn execute_eager_if(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     unprocessed: &mut Vec<token_stream::IntoIter>,
@@ -540,7 +604,7 @@ pub fn execute_eager_if(
     unprocessed.push(output.into_iter());
 }
 
-pub fn execute_unstringify(
+fn execute_unstringify(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     unprocessed: &mut Vec<token_stream::IntoIter>,

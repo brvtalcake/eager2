@@ -4,15 +4,15 @@
 //! * [`eager!`]: Attempts to eagerly expands almost every macro invocation in its body.
 //! * [`eager_macro_rules!`]: Used to declare macro that can be eagerly expanded with `eager!`.
 //! * [`lazy!`]: Used in `eager!` to revert to lazy macro expansion.
-//! * [`suspend_eager!`]: Like `lazy!`, but completely suspends expansion. 
+//! * [`suspend_eager!`]: Like `lazy!`, but completely suspends expansion.
 //!
 //! In addition to these primary macros, some eager versions of standard library are provided:
 //! `compile_error!`, `concat!`, `env!`, `include!`, `include_str!`, `stringify!`. If you wish to
 //! use the lazy versions you can either insert them inside a `lazy!{}` block, or use the full path
 //! (e.g. `std::concat`).
-//! 
+//!
 //! # Usage
-//! 
+//!
 //! ```
 //! use eager2::{eager_macro_rules, eager};
 //!
@@ -23,12 +23,10 @@
 //!     }
 //! }
 //!
-//! fn main(){
-//! 	// Use the macro inside an eager! call to expand it eagerly
-//! 	assert_eq!(4, eager!{2 plus_1!() plus_1!()});
-//! }
+//! // Use the macro inside an eager! call to expand it eagerly
+//! assert_eq!(4, eager!{2 plus_1!() plus_1!()});
 //! ```
-//! 
+//!
 //!
 //! Expanding on this, some additional helpers are provided
 //!
@@ -407,6 +405,18 @@ pub fn env(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
     impls::eager_wrap(stream.into(), "env").into()
 }
 
+/// [[eager!](macro.eager.html)] Optionally inspects an environment variable at compile time.
+///
+/// If the named environment variable is present at compile time, this will expand into an
+/// expression of type `Option<&'static str>` whose value is `Some` of the value of the environment
+/// variable (a compilation error will be emitted if the environment variable is not a valid Unicode
+/// string). If the environment variable is not present, then this will expand to `None``.
+#[proc_macro]
+#[proc_macro_error]
+pub fn option_env(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "option_env").into()
+}
+
 /// [[eager!](macro.eager.html)] Parses a file as an expression or an item according to the context.
 /// The included file is placed in the surrounding code
 /// [unhygienically](https://doc.rust-lang.org/reference/macros-by-example.html#hygiene). If
@@ -422,6 +432,19 @@ pub fn env(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro_error]
 pub fn include(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
     impls::eager_wrap(stream.into(), "include").into()
+}
+/// [[eager!](macro.eager.html)] Includes a file as a reference to a byte array.
+///
+/// The file is located relative to the current file (similarly to how
+/// modules are found). The provided path is interpreted in a platform-specific
+/// way at compile time. So, for instance, an invocation with a Windows path
+/// containing backslashes `\` would not compile correctly on Unix.
+///
+/// This macro will yield an expression of type &'static [u8; N] which is the contents of the file.
+#[proc_macro]
+#[proc_macro_error]
+pub fn include_bytes(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "include_bytes").into()
 }
 
 /// [[eager!](macro.eager.html)] Includes a UTF-8 encoded file as a string.

@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 use std::str::FromStr;
 
+use litrs::Literal;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro_error2::{Diagnostic, Level, abort_call_site, diagnostic};
 use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
-use litrs::Literal;
 use quote::quote;
 
 const EAGER2_IDENT: &str = "__eager2_ident_hyR7dMdkMPcptU6h21dioFE3EhoLprgj";
@@ -44,7 +44,9 @@ impl<I: Iterator> NextOr for I {
 }
 
 pub fn eager_call_sigil() -> TokenTree {
-    proc_macro2::Literal::from_str(EAGER_CALL_SIGIL).unwrap().into()
+    proc_macro2::Literal::from_str(EAGER_CALL_SIGIL)
+        .unwrap()
+        .into()
 }
 
 pub enum Param<'a, V> {
@@ -221,7 +223,7 @@ pub fn expect_literal<'a, 'b>(
     match (Literal::try_from(tt.clone()), s) {
         (Err(_), Param::ExactValue(s)) => {
             Err(diagnostic!(tt, Level::Error, "expected literal: `{}`", s))
-        },
+        }
         (Err(_), Param::Named(s)) => Err(diagnostic!(
             tt,
             Level::Error,
@@ -240,7 +242,6 @@ pub fn expect_string_literal<'a, 'b>(
     tt: Result<TokenTree, Span>,
     s: impl Into<Param<'a, &'b str>>,
 ) -> Result<(String, Span), Diagnostic> {
-
     let (tt, s) = match (tt.map(eat_zero_group), s.into()) {
         (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
@@ -253,9 +254,12 @@ pub fn expect_string_literal<'a, 'b>(
     let span = tt.span();
 
     let (l, s) = match (Literal::try_from(tt), s) {
-        (Err(_), Param::ExactValue(s)) => {
-            Err(diagnostic!(span, Level::Error, "expected string literal: `{}`", s))
-        },
+        (Err(_), Param::ExactValue(s)) => Err(diagnostic!(
+            span,
+            Level::Error,
+            "expected string literal: `{}`",
+            s
+        )),
         (Err(_), Param::Named(s)) => Err(diagnostic!(
             span,
             Level::Error,
@@ -267,11 +271,15 @@ pub fn expect_string_literal<'a, 'b>(
 
     match (l, s) {
         (Literal::String(l), Param::Named(_)) => Ok((l.into_value().into_owned(), span)),
-        (Literal::String(l), Param::ExactValue(s)) if l.value() == s =>
-            Ok((l.into_value().into_owned(), span)),
-        (_, Param::ExactValue(s)) => {
-            Err(diagnostic!(span, Level::Error, "expected string literal: `{}`", s))
-        },
+        (Literal::String(l), Param::ExactValue(s)) if l.value() == s => {
+            Ok((l.into_value().into_owned(), span))
+        }
+        (_, Param::ExactValue(s)) => Err(diagnostic!(
+            span,
+            Level::Error,
+            "expected string literal: `{}`",
+            s
+        )),
         (_, Param::Named(s)) => Err(diagnostic!(
             span,
             Level::Error,

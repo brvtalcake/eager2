@@ -120,7 +120,7 @@ impl MacroType {
             // e.g. [`:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
             7 => Ok(2),
             // e.g. [`$`, `crate`, `:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
-            9 if tokens_are(&tokens, [(1, "crate"), (5, "eager2")]) => Err(DollarCrate),
+            9 if tokens_are(tokens, [(1, "crate"), (4, "eager2")]) => Err(DollarCrate),
             _ if mode_only => return None,
             _ => return Some(Self::Unknown),
         };

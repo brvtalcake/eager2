@@ -1,7 +1,7 @@
 use std::mem;
 
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree, token_stream};
-use quote::{ToTokens, TokenStreamExt};
+use quote::ToTokens;
 
 pub enum EfficientGroup<P> {
     Raw(Group),
@@ -97,7 +97,7 @@ impl EfficientGroupV {
     }
     pub fn append_to_stream(&self, tokens: &mut TokenStream) {
         match self {
-            Self::Processed(p) => tokens.append_all(p.iter().cloned()),
+            Self::Processed(p) => tokens.extend(p.iter().cloned()),
             Self::Raw(g) => tokens.extend(g.stream()),
         }
     }
@@ -147,8 +147,8 @@ impl EfficientGroupT {
     {
         let s = self.as_mut_stream();
         match other {
-            EfficientGroup::Processed(p) => s.append_all(p),
-            EfficientGroup::Raw(g) => s.append_all(g.stream()),
+            EfficientGroup::Processed(p) => s.extend(p),
+            EfficientGroup::Raw(g) => s.extend(g.stream()),
         }
     }
 }
