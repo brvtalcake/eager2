@@ -1,5 +1,6 @@
 use std::mem;
 
+use litrs::Literal;
 use proc_macro_error2::abort;
 use proc_macro_error2::{Diagnostic, ResultExt};
 use proc_macro2::{Delimiter, Group, Ident, Spacing, Span, TokenStream, TokenTree, token_stream};
@@ -9,6 +10,9 @@ use crate::egroup::{EfficientGroupT, EfficientGroupV};
 use crate::exec::ExecutableMacroType;
 use crate::utils::*;
 
+/// Mode is the recordable state of the macro execution environment.
+///
+/// It can either be eager or lazy, represented by `EAGER_SIGIL` and `LAZY_SIGIL` respectively.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
     Eager,
@@ -55,10 +59,24 @@ impl ToTokens for Mode {
     }
 }
 
+#[derive(Debug)]
+struct Suspend;
+
+impl TryFrom<&'_ str> for Suspend {
+    type Error = ();
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        if s == "suspend_eager" {
+            Ok(Self)
+        } else {
+            Err(())
+        }
+    }
+}
+
 enum MacroType {
+    Suspend(Suspend),
     ModeSwitch(Mode),
     Exec(ExecutableMacroType),
-    Ignore,
     Unknown,
 }
 
@@ -76,19 +94,18 @@ impl MacroType {
         ) -> bool {
             i.into_iter().all(|(i, s)| token_is(&tokens[i], s))
         }
-        fn get_token_string(tt: &TokenTree) -> String {
+        fn ident_to_string(tt: &TokenTree) -> String {
             let TokenTree::Ident(i) = tt else {
                 unreachable!()
             };
             i.to_string()
         }
 
-        enum CrateIndex {
+        enum PathCrateErr {
             NoCrate,
             DollarCrate,
-            Index(usize),
         }
-        use CrateIndex::*;
+        use PathCrateErr::*;
 
         let crate_i = match tokens.len() {
             // Zero isn't enough
@@ -96,49 +113,55 @@ impl MacroType {
             0 | 1 => return None,
 
             // e.g. [`eager`, `!`]
-            2 => NoCrate,
+            2 => Err(NoCrate),
 
             // e.g. [`eager2`, `:`, `:`, `eager`, `!`]
-            5 => Index(0),
+            5 => Ok(0),
             // e.g. [`:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
-            7 => Index(2),
+            7 => Ok(2),
             // e.g. [`$`, `crate`, `:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
-            9 if tokens_are(&tokens, [(1, "crate"), (5, "eager2")]) => DollarCrate,
+            9 if tokens_are(&tokens, [(1, "crate"), (5, "eager2")]) => Err(DollarCrate),
             _ if mode_only => return None,
             _ => return Some(Self::Unknown),
         };
+        let crate_name = crate_i.map(|i| ident_to_string(&tokens[i]));
+        let crate_name = crate_name.as_ref().map(|s| s.as_str());
 
         enum IgnoreMode {
-            Dont,
+            DoNot,
             Prelude,
             Std,
             Core,
             Alloc,
         }
 
-        let (ignore, exec) = match crate_i {
+        let (ignore, exec) = match crate_name {
             // e.g. [`eager`, `!`]
-            NoCrate => (IgnoreMode::Prelude, true),
+            Err(NoCrate) => (IgnoreMode::Prelude, true),
 
             // e.g. [`$`, `crate`, `:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
-            DollarCrate => (IgnoreMode::Dont, true),
+            Err(DollarCrate) => (IgnoreMode::DoNot, true),
 
             // e.g. [`eager2`, `:`, `:`, `eager`, `!`]
             // e.g. [`:`, `:`, `eager2`, `:`, `:`, `eager`, `!`]
-            Index(i) if token_is(&tokens[i], found_crate) => (IgnoreMode::Dont, true),
-            Index(i) if token_is(&tokens[i], "std") => (IgnoreMode::Std, false),
-            Index(i) if token_is(&tokens[i], "core") => (IgnoreMode::Core, false),
-            Index(i) if token_is(&tokens[i], "alloc") => (IgnoreMode::Alloc, false),
-            Index(_) => return None,
+            Ok("std") => (IgnoreMode::Std, false),
+            Ok("core") => (IgnoreMode::Core, false),
+            Ok("alloc") => (IgnoreMode::Alloc, false),
+            Ok(s) if s == found_crate => (IgnoreMode::DoNot, true),
+            Ok(_) => return None,
         };
 
-        let macro_name = get_token_string(&tokens[tokens.len() - 2]);
+        let macro_name = ident_to_string(&tokens[tokens.len() - 2]);
         let macro_name = macro_name.as_str();
 
-        // Try mode first
+        // Try mode switches first
+        if let Ok(suspend) = macro_name.try_into() {
+            return Some(Self::Suspend(suspend));
+        }
         if let Ok(mode) = macro_name.try_into() {
             return Some(Self::ModeSwitch(mode));
         }
+
         // Stop if we're limited to mode only
         if mode_only {
             return None;
@@ -152,7 +175,6 @@ impl MacroType {
         }
         // Try ignore
         match (ignore, macro_name) {
-            (IgnoreMode::Dont, _) => {}
             (
                 IgnoreMode::Prelude | IgnoreMode::Std | IgnoreMode::Core,
                 "assert" | "assert_eq" | "assert_new" | "debug_assert" | "debug_assert_eq"
@@ -174,9 +196,9 @@ impl MacroType {
                 | "print"
                 | "println"
                 | "thread_local",
-            ) => return Some(Self::Ignore),
-            (IgnoreMode::Prelude | IgnoreMode::Std | IgnoreMode::Alloc, "format" | "vec") => {
-                return Some(Self::Ignore);
+            )
+            | (IgnoreMode::Prelude | IgnoreMode::Std | IgnoreMode::Alloc, "format" | "vec") => {
+                return None;
             }
             _ => {}
         }
@@ -204,14 +226,18 @@ enum TrailingMacro {
 }
 
 impl TrailingMacro {
-    fn try_new(found_crate: &str, tokens: &[TokenTree], mode_only: bool) -> Option<Self> {
+    fn try_new(
+        found_crate: &str,
+        tokens: &[TokenTree],
+        mode_only: bool,
+    ) -> Result<Option<Self>, Suspend> {
         let i = {
             let mut iter = tokens.iter().enumerate().rev();
             match iter.next() {
                 // Exclamation found, continue checking
                 Some((_, TokenTree::Punct(p))) if p.as_char() == '!' => {}
                 // No exclamation
-                None | Some(_) => return None,
+                None | Some(_) => return Ok(None),
             }
 
             loop {
@@ -251,18 +277,21 @@ impl TrailingMacro {
             }
         };
 
-        Some(
-            match MacroType::try_new(found_crate, &tokens[i..], mode_only)? {
-                MacroType::ModeSwitch(mode) => {
+        Ok(Some(
+            match MacroType::try_new(found_crate, &tokens[i..], mode_only) {
+                None => return Ok(None),
+                Some(MacroType::Suspend(s)) => return Err(s),
+                Some(MacroType::ModeSwitch(mode)) => {
                     TrailingMacro::ModeSwitch(ModeSwitchTrailingMacro { offset: i, mode })
                 }
-                MacroType::Exec(exec) => {
+                Some(MacroType::Exec(exec)) => {
                     TrailingMacro::Exec(ExecutableTrailingMacro { offset: i, exec })
                 }
-                MacroType::Ignore => return None,
-                MacroType::Unknown => TrailingMacro::Unknown(UnknownTrailingMacro { offset: i }),
+                Some(MacroType::Unknown) => {
+                    TrailingMacro::Unknown(UnknownTrailingMacro { offset: i })
+                }
             },
-        )
+        ))
     }
     fn mode(&self) -> Option<Mode> {
         match self {
@@ -371,7 +400,8 @@ impl State {
 
         let span = Span::call_site();
         let mut stream = stream.into_iter();
-        expect_literal(stream.next_or(span), EAGER_CALL_SIGIL)?;
+        let sigil = Literal::parse(EAGER_CALL_SIGIL).unwrap().into_owned();
+        expect_literal(stream.next_or(span), sigil)?;
 
         let group = expect_group(stream.next_or(span), Bracket).unwrap_or_abort();
 
@@ -466,6 +496,14 @@ impl State {
                     self.mode == Mode::Lazy,
                 );
 
+                let tm = match tm {
+                    Ok(tm) => tm,
+                    Err(Suspend) => {
+                        self.processed.push(TokenTree::Group(g));
+                        continue;
+                    }
+                };
+
                 let inner_mode = tm.as_ref().and_then(|tm| tm.mode()).unwrap_or(self.mode);
 
                 #[cfg(feature = "trace_macros")]
@@ -495,7 +533,7 @@ impl State {
                     p.processed.as_mut_vec(),
                     self.mode == Mode::Lazy,
                 );
-                (p, tm)
+                (p, tm.unwrap())
             }
         };
 

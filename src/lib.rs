@@ -1,25 +1,41 @@
 //!
-//! This crate contains three main macros used to simulate eager macro expansion:
+//! This crate contains four main macros used to simulate eager macro expansion:
 //!
-//! * [`eager!`]: Attempts to eagerly expands every macro invocation in its body.
+//! * [`eager!`]: Attempts to eagerly expands almost every macro invocation in its body.
 //! * [`eager_macro_rules!`]: Used to declare macro that can be eagerly expanded with `eager!`.
 //! * [`lazy!`]: Used in `eager!` to revert to lazy macro expansion.
+//! * [`suspend_eager!`]: Like `lazy!`, but completely suspends expansion. 
 //!
-//! In addition to these primary functions, some eager versions of standard libary are provided, such as:
+//! In addition to these primary macros, some eager versions of standard library are provided:
+//! `compile_error!`, `concat!`, `env!`, `include!`, `include_str!`, `stringify!`. If you wish to
+//! use the lazy versions you can either insert them inside a `lazy!{}` block, or use the full path
+//! (e.g. `std::concat`).
+//! 
+//! # Usage
+//! 
+//! ```
+//! use eager2::{eager_macro_rules, eager};
 //!
-//! * `compile_error!`
-//! * `concat!`
-//! * `env!`
-//! * `include!`
-//! * `include_str!`
-//! * `stringify!`
+//! //Declare an eager macro
+//! eager_macro_rules!{
+//!     macro_rules! plus_1{
+//!         ()=>{+ 1};
+//!     }
+//! }
 //!
-//! Exapnding on this, some additional helpers are provided
+//! fn main(){
+//! 	// Use the macro inside an eager! call to expand it eagerly
+//! 	assert_eq!(4, eager!{2 plus_1!() plus_1!()});
+//! }
+//! ```
+//! 
 //!
-//! * `ccase!`
-//! * `eager_if!`
-//! * `token_eq!`
-//! * `unstringify!`
+//! Expanding on this, some additional helpers are provided
+//!
+//! * `ccase!`: Modifies the case of strings and idents.
+//! * `eager_if!`: Selects between two streams of tokens.
+//! * `token_eq!`: Compares two trees of tokens for equality.
+//! * `unstringify!`: Parses a string into a stream of tokens.
 //!
 //! See each macro's documentation for details.
 //!
@@ -345,6 +361,15 @@ pub fn eager(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro_error]
 pub fn lazy(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
     impls::eval(stream.into(), false).into()
+}
+
+/// [[eager!](macro.eager.html)] Used within an [`eager!`](macro.eager.html) to fully revert to lazy expansion.
+///
+/// If this macro is called independently of `eager!`, it simply expands to the tokens passed in.
+#[proc_macro]
+#[proc_macro_error]
+pub fn suspend_eager(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    stream
 }
 
 /// [[eager!](macro.eager.html)] Causes compilation to fail with the given error message when encountered.

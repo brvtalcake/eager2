@@ -1,7 +1,9 @@
+use std::fmt::Write;
 use std::path::{self, Path, PathBuf};
 use std::str::FromStr;
 use std::{env, fs};
 
+use litrs::{BoolLit, Literal as Litrl};
 use proc_macro_error2::ResultExt;
 use proc_macro_error2::abort;
 use proc_macro2::{Group, Ident, Literal, Span, TokenStream, TokenTree, token_stream};
@@ -62,7 +64,7 @@ impl ExecutableMacroType {
 
         match self {
             Self::Concat => {
-                execute_concat(stream, processed);
+                execute_concat(span, stream, processed);
             }
             Self::Env => {
                 execute_env(span, stream, processed);
@@ -102,19 +104,19 @@ pub fn execute_env(
     processed_out: &mut EfficientGroupV,
 ) {
     let mut args = stream.into_iter();
-    let key = expect_string_literal(Ok(args.next().unwrap())).unwrap_or_abort();
+    let (key, _) = expect_string_literal(args.next_or(span), Param::Named("key")).unwrap_or_abort();
     args.next()
         .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
     let error = args
         .next()
-        .map(|tt| expect_string_literal(Ok(tt)).unwrap_or_abort());
+        .map(|tt| expect_string_literal(Ok(tt), Param::Named("error")).unwrap_or_abort());
     if args.next().is_some() {
         abort!(span, "`env!()` takes 1 or 2 arguments")
     }
 
-    let value = match (env::var(&key[1..key.len() - 1]), error) {
+    let value = match (env::var(&key), error) {
         (Ok(value), _) => value,
-        (Err(_), Some(error)) => abort!(span, "{}", error),
+        (Err(_), Some((error, _))) => abort!(span, "{}", error),
         (Err(env::VarError::NotPresent), None) => abort!(
             span,
             "environment variable `{}` not defined at compile time",
@@ -138,26 +140,59 @@ pub fn execute_stringify(
 }
 
 pub fn execute_concat(
+    span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
 ) {
     let mut buffer = String::new();
     let mut args = stream.into_iter();
     while let Some(tt) = args.next() {
-        let i = expect_ident(Ok(tt.clone()), "true");
-        let l = expect_literal(Ok(tt), Param::Named("arg"));
+        
+        let (tt, neg) = match expect_punct(Ok(tt.clone()), '-') {
+            Ok(_) => (args.next_or(span), true),
+            Err(_) => (Ok(tt), false)
+        };
 
-        match (i, l) {
-            (_, Ok(l)) => {
-                let s = l.to_string();
-                if s.starts_with('"') && s.ends_with('"') {
-                    buffer += &s[1..s.len() - 1];
-                } else {
-                    buffer += &s;
+        let (l, span) = expect_literal(tt, Param::Named("arg")).unwrap_or_abort();
+        if neg {
+            buffer.push('-');
+        }
+
+        match (neg, l) {
+            (_, Litrl::Byte(_) | Litrl::ByteString(_)) => abort!(span, "cannot concatenate a byte string literal"),
+            (false, Litrl::Bool(BoolLit::False)) => buffer.push_str("false"),
+            (false, Litrl::Bool(BoolLit::True)) => buffer.push_str("true"),
+            (_, Litrl::Float(f)) => {
+                for s in f.number_part().split('_') {
+                    buffer.push_str(s)
+                }
+            },
+            (false, Litrl::Char(c)) => buffer.push(c.value()),
+            (false, Litrl::String(s)) => buffer.push_str(s.value()),
+            (_, Litrl::Integer(i)) => {
+                use litrs::IntegerBase::*;
+                match (i.base(), i.suffix()) {
+                    (Decimal, "f32" | "f64" | "" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128") => {
+                        for s in i.raw_main_part().split('_') {
+                            buffer.push_str(s)
+                        }
+                    },
+                    (Binary, "f32" | "f64") => abort!(span, "binary float literal is not supported"),
+                    (Octal, "f32" | "f64") => abort!(span, "octal float literal is not supported"),
+
+                    (_, "" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128") => {
+                        let Some(v) = i.value::<u128>() else {
+                            abort!(span, "integer literal is too large";
+                                note = "value exceeds limit of `0xffffffffffffffffffffffffffffffff`")
+                        };
+                        write!(&mut buffer, "{v}").unwrap();
+                    }
+                    (_, s) => abort!(span, "invalid suffix `{}` for number literal", s),
+
                 }
             }
-            (Ok(i), _) => buffer += &i.to_string(),
-            (_, Err(e)) => e.abort(),
+            _ => abort!(span, "expected a literal";
+                    note = r#"only literals (like `"foo"`, `-42` and `3.14`) can be passed to `concat!()`"#)
         }
         args.next()
             .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
@@ -167,18 +202,15 @@ pub fn execute_concat(
 
 fn include_helper(span: Span, stream: impl IntoIterator<Item = TokenTree>) -> String {
     let mut args = stream.into_iter();
-    let string = args.next();
-    let string_span = string.as_ref().map(|v| v.span());
-    let string = expect_string_literal(string.ok_or(span)).unwrap_or_abort();
-    let string_span = string_span.unwrap();
+    let (file, file_span) = expect_string_literal(args.next_or(span), Param::Named("file")).unwrap_or_abort();
     args.next()
         .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
 
-    let mut path = Path::new(&string[1..string.len() - 1]);
+    let mut path = Path::new(&file);
     if path.is_relative() {
         abort!(
-            string_span,
-            "relative path is not supported here; use `include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), ...))"
+            file_span,
+            r#"relative path is not supported here; use `include!(concat!(env!("CARGO_MANIFEST_DIR"), ...))"#
         )
     }
 
@@ -225,14 +257,14 @@ pub fn execute_include_str(
 
 pub fn execute_compile_error(span: Span, stream: impl IntoIterator<Item = TokenTree>) {
     let mut args = stream.into_iter();
-    let value = expect_string_literal(Ok(args.next().unwrap())).unwrap_or_abort();
+    let (msg, _) = expect_string_literal(args.next_or(span), Param::Named("msg")).unwrap_or_abort();
     args.next()
         .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
     if args.next().is_some() {
         abort!(span, "`compile_error!()` takes 1 arguments")
     }
 
-    abort!(span, "{}", value);
+    abort!(span, "{}", msg);
 }
 
 pub fn execute_ccase(
@@ -273,17 +305,14 @@ pub fn execute_ccase(
         }
 
         expect_punct(args.next().ok_or(span), ':').unwrap_or_abort();
-        let arg_val = args.next();
-        let arg_span = arg_val.as_ref().map(|v| v.span());
-        let arg_val = expect_string_literal(arg_val.ok_or(span)).unwrap_or_abort();
-        let arg_span = arg_span.unwrap();
+        let (arg_val, arg_span) = expect_string_literal(args.next_or(span), Param::Named("val")).unwrap_or_abort();
         args.next()
             .map(|tt| expect_punct(Ok(tt), ',').unwrap_or_abort());
 
         *dest = Some((
             arg_name,
             arg_span,
-            arg_val[1..arg_val.len() - 1].to_string(),
+            arg_val,
         ));
     }
 
@@ -411,7 +440,7 @@ pub fn execute_ccase(
             }
         }
         Err(string) => {
-            let result = conv.convert(&string[1..string.len() - 1]);
+            let result = conv.convert(&string);
             Literal::string(&result).into()
         }
     };
@@ -517,11 +546,11 @@ pub fn execute_unstringify(
     unprocessed: &mut Vec<token_stream::IntoIter>,
 ) {
     let mut args = stream.into_iter();
-    let string = expect_string_literal(args.next().ok_or(span)).unwrap_or_abort();
+    let (src, _) = expect_string_literal(args.next_or(span), Param::Named("src")).unwrap_or_abort();
     args.next()
         .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
 
-    let unstrung = TokenStream::from_str(&string[1..string.len() - 1]).unwrap();
+    let unstrung = TokenStream::from_str(&src).unwrap();
 
     #[cfg(feature = "trace_macros")]
     proc_macro_error2::emit_call_site_warning!("unstringify result:{}", unstrung);

@@ -2,9 +2,9 @@ use std::borrow::Cow;
 use std::str::FromStr;
 
 use proc_macro_crate::{FoundCrate, crate_name};
-use proc_macro_error2::abort;
 use proc_macro_error2::{Diagnostic, Level, abort_call_site, diagnostic};
-use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
+use litrs::Literal;
 use quote::quote;
 
 const EAGER2_IDENT: &str = "__eager2_ident_hyR7dMdkMPcptU6h21dioFE3EhoLprgj";
@@ -44,7 +44,7 @@ impl<I: Iterator> NextOr for I {
 }
 
 pub fn eager_call_sigil() -> TokenTree {
-    Literal::from_str(EAGER_CALL_SIGIL).unwrap().into()
+    proc_macro2::Literal::from_str(EAGER_CALL_SIGIL).unwrap().into()
 }
 
 pub enum Param<'a, V> {
@@ -177,30 +177,6 @@ pub fn expect_group<'a>(
     }
 }
 
-pub fn expect_string_literal(tt: Result<TokenTree, Span>) -> Result<String, Diagnostic> {
-    let tt = match tt.map(eat_zero_group) {
-        Err(span) => {
-            return Err(diagnostic!(
-            span, Level::Error, "unexpected end of macro invocation";
-            note = "while trying to match string literal"));
-        }
-        Ok(TokenTree::Literal(l)) => {
-            let string = l.to_string();
-            if !string.starts_with('"') || !string.ends_with('"') {
-                return Err(diagnostic!(l, Level::Error, "expected string literal"));
-            }
-            return Ok(string);
-        }
-        Ok(tt) => tt,
-    };
-    Err(diagnostic!(
-        tt,
-        Level::Error,
-        "expected string literal, found token `{}`",
-        tt
-    ))
-}
-
 pub fn expect_ident_or_string(
     tt: Result<TokenTree, Span>,
 ) -> Result<Result<Ident, String>, Diagnostic> {
@@ -212,11 +188,10 @@ pub fn expect_ident_or_string(
         }
         Ok(TokenTree::Ident(i)) => return Ok(Ok(i)),
         Ok(TokenTree::Literal(l)) => {
-            let string = l.to_string();
-            if !string.starts_with('"') || !string.ends_with('"') {
-                abort!(l, "expected ident or string literal")
+            if let Literal::String(s) = Literal::from(l.clone()) {
+                return Ok(Err(s.value().to_string()));
             }
-            return Ok(Err(string));
+            TokenTree::Literal(l)
         }
 
         Ok(tt) => tt,
@@ -230,24 +205,77 @@ pub fn expect_ident_or_string(
 
 pub fn expect_literal<'a, 'b>(
     tt: Result<TokenTree, Span>,
-    s: impl Into<Param<'a, &'b str>>,
-) -> Result<Literal, Diagnostic> {
-    match (tt.map(eat_zero_group), s.into()) {
+    s: impl Into<Param<'a, Literal<String>>>,
+) -> Result<(Literal<String>, Span), Diagnostic> {
+    let (tt, s) = match (tt.map(eat_zero_group), s.into()) {
         (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match literal `{}`", s)),
         (Err(span), Param::Named(s)) => Err(diagnostic!(
             span, Level::Error, "unexpected end of macro invocation";
             note = "while trying to match literal `${}:literal`", s)),
-        (Ok(TokenTree::Literal(l)), Param::ExactValue(s)) if l.to_string() == s => Ok(l),
-        (Ok(TokenTree::Literal(l)), Param::Named(_)) => Ok(l),
-        (Ok(tt), Param::ExactValue(s)) => {
+        (Ok(tt), s) => Ok((tt, s)),
+    }?;
+    let span = tt.span();
+
+    match (Literal::try_from(tt.clone()), s) {
+        (Err(_), Param::ExactValue(s)) => {
             Err(diagnostic!(tt, Level::Error, "expected literal: `{}`", s))
-        }
-        (Ok(tt), Param::Named(s)) => Err(diagnostic!(
+        },
+        (Err(_), Param::Named(s)) => Err(diagnostic!(
             tt,
             Level::Error,
             "expected literal: `${}:literal`",
+            s
+        )),
+        (Ok(l), Param::Named(_)) => Ok((l, span)),
+        (Ok(l), Param::ExactValue(s)) if l == s => Ok((l, span)),
+        (Ok(_), Param::ExactValue(s)) => {
+            Err(diagnostic!(tt, Level::Error, "expected literal: `{}`", s))
+        }
+    }
+}
+
+pub fn expect_string_literal<'a, 'b>(
+    tt: Result<TokenTree, Span>,
+    s: impl Into<Param<'a, &'b str>>,
+) -> Result<(String, Span), Diagnostic> {
+
+    let (tt, s) = match (tt.map(eat_zero_group), s.into()) {
+        (Err(span), Param::ExactValue(s)) => Err(diagnostic!(
+            span, Level::Error, "unexpected end of macro invocation";
+            note = "while trying to match string literal `{}`", s)),
+        (Err(span), Param::Named(s)) => Err(diagnostic!(
+            span, Level::Error, "unexpected end of macro invocation";
+            note = "while trying to match string literal `${}:literal`", s)),
+        (Ok(tt), s) => Ok((tt, s)),
+    }?;
+    let span = tt.span();
+
+    let (l, s) = match (Literal::try_from(tt), s) {
+        (Err(_), Param::ExactValue(s)) => {
+            Err(diagnostic!(span, Level::Error, "expected string literal: `{}`", s))
+        },
+        (Err(_), Param::Named(s)) => Err(diagnostic!(
+            span,
+            Level::Error,
+            "expected string literal: `${}:literal`",
+            s
+        )),
+        (Ok(l), s) => Ok((l, s)),
+    }?;
+
+    match (l, s) {
+        (Literal::String(l), Param::Named(_)) => Ok((l.into_value().into_owned(), span)),
+        (Literal::String(l), Param::ExactValue(s)) if l.value() == s =>
+            Ok((l.into_value().into_owned(), span)),
+        (_, Param::ExactValue(s)) => {
+            Err(diagnostic!(span, Level::Error, "expected string literal: `{}`", s))
+        },
+        (_, Param::Named(s)) => Err(diagnostic!(
+            span,
+            Level::Error,
+            "expected string literal: `${}:literal`",
             s
         )),
     }

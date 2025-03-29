@@ -11,7 +11,7 @@ repository = "https://github.com/Daniel-Aaron-Bloom/eager2"
 readme = "README.md"
 
 [badges]
-github = { repository = "Daniel-Aaron-Bloom/cphf-rs", workflow = "CI" }
+github = { repository = "Daniel-Aaron-Bloom/eager2", workflow = "CI" }
 
 [lib]
 proc-macro = true
@@ -19,6 +19,7 @@ proc-macro = true
 [dependencies]
 convert_case = "0.8.0"
 dyn-clone = "1.0.19"
+litrs = "0.4.1"
 proc-macro-crate = "3"
 proc-macro-error2 = { version = "2", default-features = false }
 proc-macro2 = "1"
