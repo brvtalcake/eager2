@@ -13,6 +13,7 @@ use crate::utils::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ExecutableMacroType {
+    Cfg,
     CompileError,
     Concat,
     Env,
@@ -23,6 +24,7 @@ pub enum ExecutableMacroType {
     Stringify,
 
     CCase,
+    EagerCoalesce,
     EagerIf,
     TokenEq,
     Unstringify,
@@ -32,6 +34,7 @@ impl TryFrom<&str> for ExecutableMacroType {
     type Error = ();
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(match value {
+            "cfg" => Self::Cfg,
             "compile_error" => Self::CompileError,
             "concat" => Self::Concat,
             "env" => Self::Env,
@@ -42,6 +45,7 @@ impl TryFrom<&str> for ExecutableMacroType {
             "stringify" => Self::Stringify,
 
             "ccase" => Self::CCase,
+            "eager_coalesce" => Self::EagerCoalesce,
             "eager_if" => Self::EagerIf,
             "token_eq" => Self::TokenEq,
             "unstringify" => Self::Unstringify,
@@ -67,10 +71,12 @@ impl ExecutableMacroType {
         );
 
         match self {
+            Self::Cfg => {
+                execute_cfg(span, stream, processed);
+            }
             Self::CompileError => {
                 execute_compile_error(span, stream);
             }
-
             Self::Concat => {
                 execute_concat(span, stream, processed);
             }
@@ -96,17 +102,28 @@ impl ExecutableMacroType {
             Self::CCase => {
                 execute_ccase(span, stream, processed);
             }
-            Self::TokenEq => {
-                execute_token_eq(span, stream, processed);
+            Self::EagerCoalesce => {
+                execute_eager_coalesce(span, stream, processed);
             }
             Self::EagerIf => {
                 execute_eager_if(span, stream, unprocessed);
+            }
+            Self::TokenEq => {
+                execute_token_eq(span, stream, processed);
             }
             Self::Unstringify => {
                 execute_unstringify(span, stream, unprocessed);
             }
         }
     }
+}
+
+fn execute_cfg(
+    span: Span,
+    _stream: impl IntoIterator<Item = TokenTree>,
+    _processed_out: &mut EfficientGroupV,
+) {
+    abort!(span, "eager cfg is not implemented yet.")
 }
 
 fn execute_env(
@@ -343,8 +360,8 @@ fn execute_ccase(
 
     let mut args = stream.into_iter();
 
-    let input = expect_ident_or_string(args.next().ok_or(span)).unwrap_or_abort();
-    expect_punct(args.next().ok_or(span), ',').unwrap_or_abort();
+    let input = expect_ident_or_string(args.next_or(span)).unwrap_or_abort();
+    expect_punct(args.next_or(span), ',').unwrap_or_abort();
 
     let [mut from, mut boundaries, mut to, mut pattern, mut delimeter] =
         [const { Option::<(Ident, Span, String)>::None }; 5];
@@ -371,7 +388,7 @@ fn execute_ccase(
                 note = dest.0.span() => "previous found here");
         }
 
-        expect_punct(args.next().ok_or(span), ':').unwrap_or_abort();
+        expect_punct(args.next_or(span), ':').unwrap_or_abort();
         let (arg_val, arg_span) =
             expect_string_literal(args.next_or(span), Param::Named("val")).unwrap_or_abort();
         args.next()
@@ -545,7 +562,7 @@ fn execute_token_eq(
     let mut prev = None;
     for i in 0.. {
         let name = format!("arg_{}", i);
-        let next = expect_group(args.next().ok_or(span), Param::Named(&name)).unwrap_or_abort();
+        let next = expect_group(args.next_or(span), Param::Named(&name)).unwrap_or_abort();
         if let Some(prev) = prev.take() {
             if !group_eq(&prev, &next) {
                 processed_out.push(Ident::new("false", span).into());
@@ -563,6 +580,37 @@ fn execute_token_eq(
     processed_out.push(Ident::new("true", span).into());
 }
 
+fn execute_eager_coalesce(
+    span: Span,
+    stream: impl IntoIterator<Item = TokenTree>,
+    processed_out: &mut EfficientGroupV,
+) {
+    let mut args = stream.into_iter();
+
+    loop {
+        let group = expect_group(args.next_or(span), Param::Named("arg")).unwrap_or_abort().stream();
+        if !group.is_empty() {
+            processed_out.as_mut_vec().extend(group);
+            break
+        }
+        if let Some(comma) = args.next() {
+            expect_punct(Ok(comma), ',').unwrap_or_abort();
+        } else {
+            return;
+        }
+    }
+    
+    // Process the rest for syntax check
+    while let Some(comma) = args.next() {
+        expect_punct(Ok(comma), ',').unwrap_or_abort();
+        if let Some(arg) = args.next() {
+            expect_group(Ok(arg), Param::Named("arg")).unwrap_or_abort();
+        } else {
+            return;
+        }
+    }
+}
+
 fn execute_eager_if(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
@@ -570,7 +618,7 @@ fn execute_eager_if(
 ) {
     let mut args = stream.into_iter();
 
-    let check = expect_ident(args.next().ok_or(span), Param::Named("check")).unwrap_or_abort();
+    let check = expect_ident(args.next_or(span), Param::Named("check")).unwrap_or_abort();
     if args.next().is_some() {
         abort!(span, "`eager_if!()` takes 1 argument")
     }

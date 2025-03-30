@@ -22,3 +22,13 @@ fn eager_if() {
     eager! {eager_if![token_eq!{{a}, {b}}]{asdf * / 4}{let v = v*10;}};
     assert_eq!(v, 100);
 }
+
+#[test]
+fn eager_coalesce() {
+    let mut v = 1;
+    assert_eq!(v, 1);
+    eager! {eager_coalesce!{{}, {v = 10}, {v = 100}}};
+    assert_eq!(v, 10);
+    eager! {eager_coalesce!{{}, {}, {}}};
+    assert_eq!(v, 10);
+}
