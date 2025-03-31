@@ -1,7 +1,6 @@
+use eager2::{eager, eager_macro_rules};
 
-use eager2::{eager_macro_rules, eager};
-
-eager_macro_rules!{
+eager_macro_rules! {
     macro_rules! fn_body{
         ()=>{ foo() {} };
     }

@@ -21,7 +21,7 @@
 //! * `unstringify!`: Parses a string into a stream of tokens.
 //!
 //! See each macro's documentation for details.
-//! 
+//!
 //! # Usage
 //!
 //! ```

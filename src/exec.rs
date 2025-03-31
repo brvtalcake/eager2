@@ -114,7 +114,6 @@ impl ExecutableMacroType {
             }
             Self::ModulePath => {
                 execute_module_path(span, stream, processed);
-
             }
             Self::OptionEnv => {
                 execute_option_env(span, stream, processed);
@@ -641,10 +640,12 @@ fn execute_eager_coalesce(
     let mut args = stream.into_iter();
 
     loop {
-        let group = expect_group(args.next_or(span), Param::Named("arg")).unwrap_or_abort().stream();
+        let group = expect_group(args.next_or(span), Param::Named("arg"))
+            .unwrap_or_abort()
+            .stream();
         if !group.is_empty() {
             processed_out.as_mut_vec().extend(group);
-            break
+            break;
         }
         if let Some(comma) = args.next() {
             expect_punct(Ok(comma), ',').unwrap_or_abort();
@@ -652,7 +653,7 @@ fn execute_eager_coalesce(
             return;
         }
     }
-    
+
     // Process the rest for syntax check
     while let Some(comma) = args.next() {
         expect_punct(Ok(comma), ',').unwrap_or_abort();
@@ -684,21 +685,17 @@ fn execute_eager_if(
         abort!(check, "expected either token `true` or token `false");
     };
 
-    fn get_one(unprocessed: &mut Vec<token_stream::IntoIter>) -> Option<TokenTree> {
-        while let Some(stream) = unprocessed.last_mut() {
-            if let Some(tt) = stream.next() {
-                return Some(tt);
-            }
-            unprocessed.pop();
-        }
-        None
-    }
+    let true_case = expect_group(
+        unprocessed.pop_next().ok_or(span),
+        Param::Named("true_case"),
+    )
+    .unwrap_or_abort();
 
-    let true_case =
-        expect_group(get_one(unprocessed).ok_or(span), Param::Named("true_case")).unwrap_or_abort();
-
-    let false_case = expect_group(get_one(unprocessed).ok_or(span), Param::Named("false_case"))
-        .unwrap_or_abort();
+    let false_case = expect_group(
+        unprocessed.pop_next().ok_or(span),
+        Param::Named("false_case"),
+    )
+    .unwrap_or_abort();
 
     let output = if check { true_case } else { false_case }.stream();
 

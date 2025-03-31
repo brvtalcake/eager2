@@ -43,6 +43,26 @@ impl<I: Iterator> NextOr for I {
     }
 }
 
+pub trait PopNext {
+    type Item;
+    fn pop_next(&mut self) -> Option<Self::Item>;
+}
+
+impl<T> PopNext for Vec<T>
+where
+    T: Iterator,
+{
+    type Item = T::Item;
+    fn pop_next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(n) = self.last_mut()?.next() {
+                return Some(n);
+            }
+            self.pop();
+        }
+    }
+}
+
 pub fn eager_call_sigil() -> TokenTree {
     proc_macro2::Literal::from_str(EAGER_CALL_SIGIL)
         .unwrap()

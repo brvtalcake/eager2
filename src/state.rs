@@ -285,16 +285,14 @@ impl TrailingMacro {
         Ok(Some(
             match MacroType::try_new(found_crate, &tokens[offset..], mode_only) {
                 None => return Ok(None),
-                Some(MacroType::Suspend(_)) => return Err(SuspendTrailingMacro{offset}),
+                Some(MacroType::Suspend(_)) => return Err(SuspendTrailingMacro { offset }),
                 Some(MacroType::ModeSwitch(mode)) => {
                     TrailingMacro::ModeSwitch(ModeSwitchTrailingMacro { offset, mode })
                 }
                 Some(MacroType::Exec(exec)) => {
                     TrailingMacro::Exec(ExecutableTrailingMacro { offset, exec })
                 }
-                Some(MacroType::Unknown) => {
-                    TrailingMacro::Unknown(UnknownTrailingMacro { offset })
-                }
+                Some(MacroType::Unknown) => TrailingMacro::Unknown(UnknownTrailingMacro { offset }),
             },
         ))
     }
@@ -476,7 +474,8 @@ impl State {
         found_crate: &str,
     ) -> Result<FullyProccesedState, (State, MacroPath, TokenStream)> {
         while !self.unprocessed.is_empty() || !self.stack.is_empty() {
-            if let Some((path, stream)) = self.process_one(found_crate) {
+            self.process_tokens(found_crate);
+            if let Some((path, stream)) = self.pop_stack(found_crate) {
                 return Err((self, path, stream));
             }
         }
@@ -487,51 +486,51 @@ impl State {
         !self.free.is_empty() || !self.locked.is_empty()
     }
 
-    fn process_one(&mut self, found_crate: &str) -> Option<(MacroPath, TokenStream)> {
-        while let Some(unprocessed) = self.unprocessed.last_mut() {
-            for tt in unprocessed {
-                let g = match tt {
-                    TokenTree::Group(g) => g,
-                    tt => {
-                        self.processed.push(tt);
-                        continue;
-                    }
-                };
+    fn process_tokens(&mut self, found_crate: &str) {
+        while let Some(tt) = self.unprocessed.pop_next() {
+            let g = match tt {
+                TokenTree::Group(g) => g,
+                tt => {
+                    self.processed.push(tt);
+                    continue;
+                }
+            };
 
-                // lookback to see if this group is a macro param
-                // (looking especially for mode-switching macros)
-                let tm = TrailingMacro::try_new(
-                    found_crate,
-                    self.processed.as_mut_vec(),
-                    self.mode == Mode::Lazy,
-                );
+            // lookback to see if this group is a macro param
+            // (looking especially for mode-switching macros)
+            let tm = TrailingMacro::try_new(
+                found_crate,
+                self.processed.as_mut_vec(),
+                self.mode == Mode::Lazy,
+            );
 
-                let tm = match tm {
-                    Ok(tm) => tm,
-                    Err(suspend) => {
-                        suspend.truncate(self.processed.as_mut_vec());
-                        self.free.append(self.processed.take());
-                        self.processed.as_mut_vec().extend(g.stream());
-                        continue;
-                    }
-                };
+            let tm = match tm {
+                Ok(tm) => tm,
+                Err(suspend) => {
+                    suspend.truncate(self.processed.as_mut_vec());
+                    self.free.append(self.processed.take());
+                    self.processed.as_mut_vec().extend(g.stream());
+                    continue;
+                }
+            };
 
-                let inner_mode = tm.as_ref().and_then(|tm| tm.mode()).unwrap_or(self.mode);
+            let inner_mode = tm.as_ref().and_then(|tm| tm.mode()).unwrap_or(self.mode);
 
-                #[cfg(feature = "trace_macros")]
-                proc_macro_error2::emit_call_site_warning!(
-                    "processing with mode {:?}: {}",
-                    inner_mode,
-                    g
-                );
+            #[cfg(feature = "trace_macros")]
+            proc_macro_error2::emit_call_site_warning!(
+                "processing with mode {:?}: {}",
+                inner_mode,
+                g
+            );
 
-                let stack = State::new(g.span(), g.delimiter(), inner_mode, g.stream());
-                let stack = mem::replace(self, stack);
-                self.stack = Stack::Processed(Box::new(stack), tm);
-                return None;
-            }
-            self.unprocessed.pop();
+            let stack = State::new(g.span(), g.delimiter(), inner_mode, g.stream());
+            let stack = mem::replace(self, stack);
+            self.stack = Stack::Processed(Box::new(stack), tm);
         }
+    }
+
+    fn pop_stack(&mut self, found_crate: &str) -> Option<(MacroPath, TokenStream)> {
+        debug_assert!(self.unprocessed.is_empty());
 
         // `stack`` is the caller, `self` is the completed recursive call
         let (mut stack, tm) = match self.stack.take() {

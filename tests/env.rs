@@ -5,4 +5,3 @@ const BAR: Option<&str> = option_env!("PATH");
 fn test() {
     assert_eq!(FOO, BAR);
 }
- 
