@@ -225,13 +225,18 @@ enum TrailingMacro {
     Unknown(UnknownTrailingMacro),
 }
 
+#[derive(Debug)]
+struct SuspendTrailingMacro {
+    offset: usize,
+}
+
 impl TrailingMacro {
     fn try_new(
         found_crate: &str,
         tokens: &[TokenTree],
         mode_only: bool,
-    ) -> Result<Option<Self>, Suspend> {
-        let i = {
+    ) -> Result<Option<Self>, SuspendTrailingMacro> {
+        let offset = {
             let mut iter = tokens.iter().enumerate().rev();
             match iter.next() {
                 // Exclamation found, continue checking
@@ -278,17 +283,17 @@ impl TrailingMacro {
         };
 
         Ok(Some(
-            match MacroType::try_new(found_crate, &tokens[i..], mode_only) {
+            match MacroType::try_new(found_crate, &tokens[offset..], mode_only) {
                 None => return Ok(None),
-                Some(MacroType::Suspend(s)) => return Err(s),
+                Some(MacroType::Suspend(_)) => return Err(SuspendTrailingMacro{offset}),
                 Some(MacroType::ModeSwitch(mode)) => {
-                    TrailingMacro::ModeSwitch(ModeSwitchTrailingMacro { offset: i, mode })
+                    TrailingMacro::ModeSwitch(ModeSwitchTrailingMacro { offset, mode })
                 }
                 Some(MacroType::Exec(exec)) => {
-                    TrailingMacro::Exec(ExecutableTrailingMacro { offset: i, exec })
+                    TrailingMacro::Exec(ExecutableTrailingMacro { offset, exec })
                 }
                 Some(MacroType::Unknown) => {
-                    TrailingMacro::Unknown(UnknownTrailingMacro { offset: i })
+                    TrailingMacro::Unknown(UnknownTrailingMacro { offset })
                 }
             },
         ))
@@ -315,6 +320,11 @@ impl ExecutableTrailingMacro {
 impl UnknownTrailingMacro {
     fn split_off(self, tokens: &mut Vec<TokenTree>) -> Vec<TokenTree> {
         tokens.split_off(self.offset)
+    }
+}
+impl SuspendTrailingMacro {
+    fn truncate(self, tokens: &mut Vec<TokenTree>) {
+        tokens.truncate(self.offset);
     }
 }
 
@@ -498,8 +508,10 @@ impl State {
 
                 let tm = match tm {
                     Ok(tm) => tm,
-                    Err(Suspend) => {
-                        self.processed.push(TokenTree::Group(g));
+                    Err(suspend) => {
+                        suspend.truncate(self.processed.as_mut_vec());
+                        self.free.append(self.processed.take());
+                        self.processed.as_mut_vec().extend(g.stream());
                         continue;
                     }
                 };

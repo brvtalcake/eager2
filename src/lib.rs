@@ -1,16 +1,27 @@
 //!
 //! This crate contains four main macros used to simulate eager macro expansion:
 //!
-//! * [`eager!`]: Attempts to eagerly expands almost every macro invocation in its body.
+//! * [`eager!`]: Switches the macro-environment to eager environment which attempts to expand almost every macro invocation in its body.
 //! * [`eager_macro_rules!`]: Used to declare macro that can be eagerly expanded with `eager!`.
 //! * [`lazy!`]: Used in `eager!` to revert to lazy macro expansion.
 //! * [`suspend_eager!`]: Like `lazy!`, but completely suspends expansion.
 //!
 //! In addition to these primary macros, some eager versions of standard library are provided:
-//! `compile_error!`, `concat!`, `env!`, `include!`, `include_str!`, `stringify!`. If you wish to
-//! use the lazy versions you can either insert them inside a `lazy!{}` block, or use the full path
-//! (e.g. `std::concat`).
+//! `compile_error!`, `concat!`, `env!`, `include!`, `include_bytes!`, `include_str!`,
+//! `option_env!`, `stringify!`. If you wish to use the lazy versions you can either insert a
+//! `lazy!{}` block around them, or use the full path (e.g. `std::concat`).
 //!
+//!
+//! Expanding on this, some additional helpers are provided
+//!
+//! * `ccase!`: Modifies the case of strings and idents.
+//! * `eager_coalesce!`: Selects the first non-empty stream of tokens.
+//! * `eager_if!`: Selects between two streams of tokens.
+//! * `token_eq!`: Compares two trees of tokens for equality.
+//! * `unstringify!`: Parses a string into a stream of tokens.
+//!
+//! See each macro's documentation for details.
+//! 
 //! # Usage
 //!
 //! ```
@@ -27,15 +38,6 @@
 //! assert_eq!(4, eager!{2 plus_1!() plus_1!()});
 //! ```
 //!
-//!
-//! Expanding on this, some additional helpers are provided
-//!
-//! * `ccase!`: Modifies the case of strings and idents.
-//! * `eager_if!`: Selects between two streams of tokens.
-//! * `token_eq!`: Compares two trees of tokens for equality.
-//! * `unstringify!`: Parses a string into a stream of tokens.
-//!
-//! See each macro's documentation for details.
 //!
 
 use proc_macro_error2::proc_macro_error;
@@ -367,7 +369,7 @@ pub fn lazy(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro]
 #[proc_macro_error]
 pub fn suspend_eager(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    stream
+    impls::eager_wrap(stream.into(), "suspend_eager").into()
 }
 
 /// [[eager!](macro.eager.html)] Causes compilation to fail with the given error message when encountered.
@@ -482,6 +484,13 @@ pub fn stringify(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro_error]
 pub fn ccase(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
     impls::eager_wrap(stream.into(), "ccase").into()
+}
+
+/// [[eager!](macro.eager.html)] Expands into the first non-empty block.
+#[proc_macro]
+#[proc_macro_error]
+pub fn eager_coalesce(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    impls::eager_wrap(stream.into(), "eager_coalesce").into()
 }
 
 /// [[eager!](macro.eager.html)] Conditionally expands into one of two blocks.

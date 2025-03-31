@@ -14,12 +14,16 @@ use crate::utils::*;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ExecutableMacroType {
     Cfg,
+    Column,
     CompileError,
     Concat,
     Env,
+    File,
     Include,
     IncludeBytes,
     IncludeStr,
+    Line,
+    ModulePath,
     OptionEnv,
     Stringify,
 
@@ -35,12 +39,16 @@ impl TryFrom<&str> for ExecutableMacroType {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Ok(match value {
             "cfg" => Self::Cfg,
+            "column" => Self::Column,
             "compile_error" => Self::CompileError,
             "concat" => Self::Concat,
             "env" => Self::Env,
+            "file" => Self::File,
             "include" => Self::Include,
             "include_bytes" => Self::IncludeBytes,
             "include_str" => Self::IncludeStr,
+            "line" => Self::Line,
+            "module_path" => Self::ModulePath,
             "option_env" => Self::OptionEnv,
             "stringify" => Self::Stringify,
 
@@ -80,8 +88,14 @@ impl ExecutableMacroType {
             Self::Concat => {
                 execute_concat(span, stream, processed);
             }
+            Self::Column => {
+                execute_column(span, stream, processed);
+            }
             Self::Env => {
                 execute_env(span, stream, processed);
+            }
+            Self::File => {
+                execute_file(span, stream, processed);
             }
             Self::Stringify => {
                 execute_stringify(stream, processed);
@@ -94,6 +108,13 @@ impl ExecutableMacroType {
             }
             Self::IncludeStr => {
                 execute_include_str(span, stream, processed);
+            }
+            Self::Line => {
+                execute_line(span, stream, processed);
+            }
+            Self::ModulePath => {
+                execute_module_path(span, stream, processed);
+
             }
             Self::OptionEnv => {
                 execute_option_env(span, stream, processed);
@@ -126,75 +147,16 @@ fn execute_cfg(
     abort!(span, "eager cfg is not implemented yet.")
 }
 
-fn execute_env(
-    span: Span,
-    stream: impl IntoIterator<Item = TokenTree>,
-    processed_out: &mut EfficientGroupV,
-) {
+fn execute_compile_error(span: Span, stream: impl IntoIterator<Item = TokenTree>) {
     let mut args = stream.into_iter();
-    let (key, _) = expect_string_literal(args.next_or(span), Param::Named("key")).unwrap_or_abort();
-    args.next()
-        .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
-    let error = args
-        .next()
-        .map(|tt| expect_string_literal(Ok(tt), Param::Named("error")).unwrap_or_abort());
-    if args.next().is_some() {
-        abort!(span, "`env!()` takes 1 or 2 arguments")
-    }
-
-    let value = match (env::var(&key), error) {
-        (Ok(value), _) => value,
-        (Err(_), Some((error, _))) => abort!(span, "{}", error),
-        (Err(env::VarError::NotPresent), None) => abort!(
-            span,
-            "environment variable `{}` not defined at compile time",
-            key
-        ),
-        (Err(env::VarError::NotUnicode(_)), None) => abort!(
-            span,
-            "environment variable `{}` was present but not unicode at compile time",
-            key
-        ),
-    };
-    processed_out.push(TokenTree::Literal(Literal::string(&value)));
-}
-
-fn execute_option_env(
-    span: Span,
-    stream: impl IntoIterator<Item = TokenTree>,
-    processed_out: &mut EfficientGroupV,
-) {
-    let mut args = stream.into_iter();
-    let (key, _) = expect_string_literal(args.next_or(span), Param::Named("key")).unwrap_or_abort();
+    let (msg, _) = expect_string_literal(args.next_or(span), Param::Named("msg")).unwrap_or_abort();
     args.next()
         .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
     if args.next().is_some() {
-        abort!(span, "`option_env!()` takes 1 argument")
+        abort!(span, "`compile_error!()` takes 1 arguments")
     }
 
-    match env::var(&key) {
-        Err(env::VarError::NotUnicode(_)) => abort!(
-            span,
-            "environment variable `{}` was present but not unicode at compile time",
-            key
-        ),
-        Ok(value) => {
-            let val = TokenTree::Literal(Literal::string(&value));
-            let some = Ident::new("Some", span);
-            let group = Group::new(Delimiter::Parenthesis, val.into());
-            processed_out.push(some.into());
-            processed_out.push(group.into());
-        }
-        Err(env::VarError::NotPresent) => processed_out.push(Ident::new("None", span).into()),
-    };
-}
-
-fn execute_stringify(
-    stream: impl IntoIterator<Item = TokenTree>,
-    processed_out: &mut EfficientGroupV,
-) {
-    let s = TokenStream::from_iter(stream).to_string();
-    processed_out.push(TokenTree::Literal(Literal::string(&s)));
+    abort!(span, "{}", msg);
 }
 
 fn execute_concat(
@@ -268,6 +230,93 @@ fn execute_concat(
     processed_out.push(TokenTree::Literal(Literal::string(&buffer)));
 }
 
+fn execute_column(
+    span: Span,
+    _stream: impl IntoIterator<Item = TokenTree>,
+    _processed_out: &mut EfficientGroupV,
+) {
+    abort!(span, "eager column is not implemented yet.")
+}
+
+fn execute_env(
+    span: Span,
+    stream: impl IntoIterator<Item = TokenTree>,
+    processed_out: &mut EfficientGroupV,
+) {
+    let mut args = stream.into_iter();
+    let (key, _) = expect_string_literal(args.next_or(span), Param::Named("key")).unwrap_or_abort();
+    args.next()
+        .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
+    let error = args
+        .next()
+        .map(|tt| expect_string_literal(Ok(tt), Param::Named("error")).unwrap_or_abort());
+    if args.next().is_some() {
+        abort!(span, "`env!()` takes 1 or 2 arguments")
+    }
+
+    let value = match (env::var(&key), error) {
+        (Ok(value), _) => value,
+        (Err(_), Some((error, _))) => abort!(span, "{}", error),
+        (Err(env::VarError::NotPresent), None) => abort!(
+            span,
+            "environment variable `{}` not defined at compile time",
+            key
+        ),
+        (Err(env::VarError::NotUnicode(_)), None) => abort!(
+            span,
+            "environment variable `{}` was present but not unicode at compile time",
+            key
+        ),
+    };
+    processed_out.push(TokenTree::Literal(Literal::string(&value)));
+}
+
+fn execute_option_env(
+    span: Span,
+    stream: impl IntoIterator<Item = TokenTree>,
+    processed_out: &mut EfficientGroupV,
+) {
+    let mut args = stream.into_iter();
+    let (key, _) = expect_string_literal(args.next_or(span), Param::Named("key")).unwrap_or_abort();
+    args.next()
+        .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
+    if args.next().is_some() {
+        abort!(span, "`option_env!()` takes 1 argument")
+    }
+
+    match env::var(&key) {
+        Err(env::VarError::NotUnicode(_)) => abort!(
+            span,
+            "environment variable `{}` was present but not unicode at compile time",
+            key
+        ),
+        Ok(value) => {
+            let val = TokenTree::Literal(Literal::string(&value));
+            let some = Ident::new("Some", span);
+            let group = Group::new(Delimiter::Parenthesis, val.into());
+            processed_out.push(some.into());
+            processed_out.push(group.into());
+        }
+        Err(env::VarError::NotPresent) => processed_out.push(Ident::new("None", span).into()),
+    };
+}
+
+fn execute_file(
+    span: Span,
+    _stream: impl IntoIterator<Item = TokenTree>,
+    _processed_out: &mut EfficientGroupV,
+) {
+    abort!(span, "eager file is not implemented yet.")
+}
+
+fn execute_stringify(
+    stream: impl IntoIterator<Item = TokenTree>,
+    processed_out: &mut EfficientGroupV,
+) {
+    let s = TokenStream::from_iter(stream).to_string();
+    processed_out.push(TokenTree::Literal(Literal::string(&s)));
+}
+
 fn include_helper<R: 'static>(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
@@ -339,16 +388,20 @@ fn execute_include_bytes(
     processed_out.push(string.into());
 }
 
-fn execute_compile_error(span: Span, stream: impl IntoIterator<Item = TokenTree>) {
-    let mut args = stream.into_iter();
-    let (msg, _) = expect_string_literal(args.next_or(span), Param::Named("msg")).unwrap_or_abort();
-    args.next()
-        .map(|v| expect_punct(Ok(v), ',').unwrap_or_abort());
-    if args.next().is_some() {
-        abort!(span, "`compile_error!()` takes 1 arguments")
-    }
+fn execute_line(
+    span: Span,
+    _stream: impl IntoIterator<Item = TokenTree>,
+    _processed_out: &mut EfficientGroupV,
+) {
+    abort!(span, "eager line is not implemented yet.")
+}
 
-    abort!(span, "{}", msg);
+fn execute_module_path(
+    span: Span,
+    _stream: impl IntoIterator<Item = TokenTree>,
+    _processed_out: &mut EfficientGroupV,
+) {
+    abort!(span, "eager module_path is not implemented yet.")
 }
 
 fn execute_ccase(
