@@ -184,7 +184,7 @@ mod test_attributes {
         use eager2::eager_macro_rules;
         eager_macro_rules! { $eager_1
             #[macro_export]
-            #[doc(hidden)]	// Whether this gets the correct effect cannot be tested
+            #[doc(hidden)]  // Whether this gets the correct effect cannot be tested
             macro_rules! test_macro_1{
                 () => {1};
             }

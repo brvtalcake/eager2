@@ -1,9 +1,10 @@
-use eager2::{eager, eager_macro_rules};
+#![allow(clippy::nonminimal_bool, clippy::assertions_on_constants)]
 
-eager_macro_rules! {
-    macro_rules! test_macro{
-        {1} =>{ 1 };
-    }
+use eager2::{eager, eager_macro};
+
+#[eager_macro]
+macro_rules! test_macro{
+    {1} =>{ 1 };
 }
 
 #[test]

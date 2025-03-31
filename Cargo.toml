@@ -4,17 +4,15 @@ version = "1.0.0"
 authors = ["Daniel Bloom"]
 edition = "2024"
 categories = ["development-tools"]
-description = "Proc-macro crate for eager macro expansion"
+description = "Proc-macros for eager macro expansion"
 documentation = "https://docs.rs/eager2"
 license = "MIT"
 repository = "https://github.com/Daniel-Aaron-Bloom/eager2"
 readme = "README.md"
 
-[badges]
-github = { repository = "Daniel-Aaron-Bloom/eager2", workflow = "CI" }
-
 [lib]
 proc-macro = true
+path = "src/lib.rs"
 
 [dependencies]
 convert_case = "0.8.0"

@@ -2,6 +2,7 @@ use proc_macro2::{Delimiter, Ident, Span, TokenStream};
 use quote::quote;
 
 use crate::state::{Mode, State};
+#[allow(clippy::wildcard_imports)]
 use crate::utils::*;
 
 pub fn eval(stream: TokenStream, eager: bool) -> TokenStream {
@@ -13,6 +14,7 @@ pub fn eval(stream: TokenStream, eager: bool) -> TokenStream {
     eval_helper(stream, eager, name)
 }
 
+#[allow(clippy::needless_pass_by_value)]
 pub fn eager_wrap(stream: TokenStream, name: &str) -> TokenStream {
     #[cfg(feature = "trace_macros")]
     proc_macro_error2::emit_call_site_warning!("{} input: {}", name, stream);

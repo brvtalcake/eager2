@@ -241,7 +241,7 @@ mod paren_test_prefix {
             ( 1 ) =>{
                 (5+5) test_macro!(2)
             };
-            ( 2	) =>{
+            ( 2 ) =>{
                 + 1 test_macro!(3)
             };
             ( 3 ) =>{

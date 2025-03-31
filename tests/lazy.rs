@@ -17,7 +17,7 @@ mod test_lazy_block_in_eager_is_lazy {
                 lazy_macro!{}
             }
         };
-        assert_eq!(2, x)
+        assert_eq!(2, x);
     }
 }
 mod test_lazy_block_without_eager {
@@ -36,7 +36,7 @@ mod test_lazy_block_without_eager {
         let x = lazy! {
             lazy_macro!{}
         };
-        assert_eq!(2, x)
+        assert_eq!(2, x);
     }
 }
 mod test_multiple_lazy_blocks {
@@ -59,7 +59,7 @@ mod test_multiple_lazy_blocks {
             +
             lazy!{lazy_macro!{}}
         };
-        assert_eq!(3, x)
+        assert_eq!(3, x);
     }
 }
 mod test_nested_lazy {
@@ -84,7 +84,7 @@ mod test_nested_lazy {
                 }
             }
         };
-        assert_eq!(2, x)
+        assert_eq!(2, x);
     }
 }
 mod test_eager_in_lazy {
@@ -171,7 +171,7 @@ mod paren_test_lazy_block_in_eager_is_lazy {
                 lazy_macro!()
             )
         };
-        assert_eq!(2, x)
+        assert_eq!(2, x);
     }
 }
 mod paren_test_lazy_block_without_eager {
@@ -190,7 +190,7 @@ mod paren_test_lazy_block_without_eager {
         let x = lazy! {
             lazy_macro!()
         };
-        assert_eq!(2, x)
+        assert_eq!(2, x);
     }
 }
 mod paren_test_multiple_lazy_blocks {
@@ -213,7 +213,7 @@ mod paren_test_multiple_lazy_blocks {
             +
             lazy!(lazy_macro!())
         };
-        assert_eq!(3, x)
+        assert_eq!(3, x);
     }
 }
 mod paren_test_nested_lazy {
@@ -238,7 +238,7 @@ mod paren_test_nested_lazy {
                 )
             )
         };
-        assert_eq!(2, x)
+        assert_eq!(2, x);
     }
 }
 mod paren_test_eager_in_lazy {

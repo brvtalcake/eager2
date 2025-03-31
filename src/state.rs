@@ -8,6 +8,7 @@ use quote::{ToTokens, TokenStreamExt};
 
 use crate::egroup::{EfficientGroupT, EfficientGroupV};
 use crate::exec::ExecutableMacroType;
+#[allow(clippy::wildcard_imports)]
 use crate::utils::*;
 
 /// Mode is the recordable state of the macro execution environment.
@@ -107,6 +108,14 @@ impl MacroType {
         }
         use PathCrateErr::*;
 
+        enum IgnoreMode {
+            DoNot,
+            Prelude,
+            Std,
+            Core,
+            Alloc,
+        }
+
         let crate_i = match tokens.len() {
             // Zero isn't enough
             // One token is just a `!` which isn't enough
@@ -125,15 +134,7 @@ impl MacroType {
             _ => return Some(Self::Unknown),
         };
         let crate_name = crate_i.map(|i| ident_to_string(&tokens[i]));
-        let crate_name = crate_name.as_ref().map(|s| s.as_str());
-
-        enum IgnoreMode {
-            DoNot,
-            Prelude,
-            Std,
-            Core,
-            Alloc,
-        }
+        let crate_name = crate_name.as_ref().map(String::as_str);
 
         let (ignore, exec) = match crate_name {
             // e.g. [`eager`, `!`]
@@ -331,7 +332,7 @@ pub struct MacroPath {
 }
 impl ToTokens for MacroPath {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.append_all(self.segments.iter())
+        tokens.append_all(self.segments.iter());
     }
 }
 enum Stack {
@@ -425,6 +426,7 @@ impl State {
     }
 
     // Only should be called on encoded groups
+    #[allow(clippy::needless_pass_by_value)]
     fn decode_from_group(g: Group, extra: Option<token_stream::IntoIter>) -> Self {
         use Delimiter::Bracket;
 
@@ -461,9 +463,9 @@ impl State {
             span,
             delim,
             mode,
-            free: Default::default(),
-            locked: Default::default(),
-            processed: Default::default(),
+            free: EfficientGroupT::default(),
+            locked: EfficientGroupT::default(),
+            processed: EfficientGroupV::default(),
             stack: Stack::Empty,
             unprocessed: vec![stream.into_iter()],
         }
@@ -508,13 +510,22 @@ impl State {
                 Ok(tm) => tm,
                 Err(suspend) => {
                     suspend.truncate(self.processed.as_mut_vec());
-                    self.free.append(self.processed.take());
-                    self.processed.as_mut_vec().extend(g.stream());
+                    let locked = EfficientGroupT::Processed(g.stream());
+                    if self.has_locking() {
+                        self.locked.append(self.processed.take());
+                        self.locked.append(locked);
+                    } else {
+                        self.free.append(self.processed.take());
+                        self.locked = locked;
+                    }
                     continue;
                 }
             };
 
-            let inner_mode = tm.as_ref().and_then(|tm| tm.mode()).unwrap_or(self.mode);
+            let inner_mode = tm
+                .as_ref()
+                .and_then(TrailingMacro::mode)
+                .unwrap_or(self.mode);
 
             #[cfg(feature = "trace_macros")]
             proc_macro_error2::emit_call_site_warning!(
@@ -530,6 +541,8 @@ impl State {
     }
 
     fn pop_stack(&mut self, found_crate: &str) -> Option<(MacroPath, TokenStream)> {
+        use TrailingMacro::{Exec, ModeSwitch, Unknown};
+
         debug_assert!(self.unprocessed.is_empty());
 
         // `stack`` is the caller, `self` is the completed recursive call
@@ -550,8 +563,6 @@ impl State {
 
         // `self` is the caller, `stack` is the completed recursive call
         mem::swap(self, &mut stack);
-
-        use TrailingMacro::{Exec, ModeSwitch, Unknown};
 
         match (tm, self.mode) {
             // Handle mode switches
@@ -605,7 +616,7 @@ impl State {
                     stream,
                     &mut self.processed,
                     &mut self.unprocessed,
-                )
+                );
             }
             // Hand over execution to unknown macros if in eager mode
             (Some(Unknown(tm)), Mode::Eager) => {

@@ -12,5 +12,5 @@ fn build_fn() {
         #[doc = "just a function"]
         suspend_eager!{eager!{fn fn_body!()}}
     }
-    foo()
+    foo();
 }

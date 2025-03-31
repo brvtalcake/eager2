@@ -9,6 +9,7 @@ use proc_macro_error2::abort;
 use proc_macro2::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree, token_stream};
 
 use crate::egroup::EfficientGroupV;
+#[allow(clippy::wildcard_imports)]
 use crate::utils::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -184,7 +185,7 @@ fn execute_concat(
             (false, Litrl::Bool(BoolLit::True)) => buffer.push_str("true"),
             (_, Litrl::Float(f)) => {
                 for s in f.number_part().split('_') {
-                    buffer.push_str(s)
+                    buffer.push_str(s);
                 }
             }
             (false, Litrl::Char(c)) => buffer.push(c.value()),
@@ -198,7 +199,7 @@ fn execute_concat(
                         | "i16" | "i32" | "i64" | "i128",
                     ) => {
                         for s in i.raw_main_part().split('_') {
-                            buffer.push_str(s)
+                            buffer.push_str(s);
                         }
                     }
                     (Binary, "f32" | "f64") => {
@@ -403,12 +404,84 @@ fn execute_module_path(
     abort!(span, "eager module_path is not implemented yet.")
 }
 
+fn case_value_parser(span: Span, s: &str) -> convert_case::Case {
+    use convert_case::{Case, Casing};
+
+    const ALL_CASES: &[(&str, Case)] = &{
+        [
+            ("snake", Case::Snake),
+            ("constant", Case::Constant),
+            ("uppersnake", Case::UpperSnake),
+            ("ada", Case::Ada),
+            ("kebab", Case::Kebab),
+            ("cobol", Case::Cobol),
+            ("upperkebab", Case::UpperKebab),
+            ("train", Case::Train),
+            ("flat", Case::Flat),
+            ("upperflat", Case::UpperFlat),
+            ("pascal", Case::Pascal),
+            ("uppercamel", Case::UpperCamel),
+            ("camel", Case::Camel),
+            ("lower", Case::Lower),
+            ("upper", Case::Upper),
+            ("title", Case::Title),
+            ("sentence", Case::Sentence),
+            ("alternating", Case::Alternating),
+            ("toggle", Case::Toggle),
+            ("screaming", Case::Constant),
+            ("alternate", Case::Alternating),
+        ]
+    };
+
+    let case_str = s.to_case(Case::Flat);
+    for (name, case) in ALL_CASES {
+        if case_str == *name {
+            return *case;
+        }
+    }
+    abort!(
+        span,
+        "'{}' is not a valid case.  See documentation for a list of cases.",
+        s
+    );
+}
+
+fn pattern_value_parser(span: Span, s: &str) -> convert_case::pattern::Pattern {
+    use convert_case::{Case, Casing, pattern::Pattern};
+
+    const ALL_PATTERNS: &[(&str, Pattern)] = &{
+        use convert_case::pattern;
+        [
+            ("uppercase", pattern::uppercase),
+            ("lowercase", pattern::lowercase),
+            ("capital", pattern::capital),
+            ("camel", pattern::camel),
+            ("toggle", pattern::toggle),
+            ("alternating", pattern::alternating),
+            ("sentence", pattern::sentence),
+        ]
+    };
+
+    let pattern_str = s.to_case(Case::Flat);
+    for pattern in ALL_PATTERNS {
+        let pattern_in_flat = pattern.0.to_case(Case::Flat);
+        if pattern_str == pattern_in_flat {
+            return pattern.1;
+        }
+    }
+    abort!(
+        span,
+        "'{}' is not a valid pattern.  See documentation for list of patterns.",
+        s
+    );
+}
+
 fn execute_ccase(
     span: Span,
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
 ) {
-    use convert_case::{Boundary, Case, Casing, Converter, pattern::Pattern};
+    use convert_case::{Boundary, Converter};
 
     let mut args = stream.into_iter();
 
@@ -447,73 +520,6 @@ fn execute_ccase(
             .map(|tt| expect_punct(Ok(tt), ',').unwrap_or_abort());
 
         *dest = Some((arg_name, arg_span, arg_val));
-    }
-
-    const ALL_CASES: &[(&str, Case)] = &{
-        [
-            ("snake", Case::Snake),
-            ("constant", Case::Constant),
-            ("uppersnake", Case::UpperSnake),
-            ("ada", Case::Ada),
-            ("kebab", Case::Kebab),
-            ("cobol", Case::Cobol),
-            ("upperkebab", Case::UpperKebab),
-            ("train", Case::Train),
-            ("flat", Case::Flat),
-            ("upperflat", Case::UpperFlat),
-            ("pascal", Case::Pascal),
-            ("uppercamel", Case::UpperCamel),
-            ("camel", Case::Camel),
-            ("lower", Case::Lower),
-            ("upper", Case::Upper),
-            ("title", Case::Title),
-            ("sentence", Case::Sentence),
-            ("alternating", Case::Alternating),
-            ("toggle", Case::Toggle),
-            ("screaming", Case::Constant),
-            ("alternate", Case::Alternating),
-        ]
-    };
-
-    fn case_value_parser(span: Span, s: &str) -> Case {
-        let case_str = s.to_case(Case::Flat);
-        for (name, case) in ALL_CASES {
-            if case_str == *name {
-                return *case;
-            }
-        }
-        abort!(
-            span,
-            "'{}' is not a valid case.  See documentation for a list of cases.",
-            s
-        );
-    }
-    const ALL_PATTERNS: &[(&str, Pattern)] = &{
-        use convert_case::pattern;
-        [
-            ("uppercase", pattern::uppercase),
-            ("lowercase", pattern::lowercase),
-            ("capital", pattern::capital),
-            ("camel", pattern::camel),
-            ("toggle", pattern::toggle),
-            ("alternating", pattern::alternating),
-            ("sentence", pattern::sentence),
-        ]
-    };
-
-    fn pattern_value_parser(span: Span, s: &str) -> Pattern {
-        let pattern_str = s.to_case(Case::Flat);
-        for pattern in ALL_PATTERNS {
-            let pattern_in_flat = pattern.0.to_case(Case::Flat);
-            if pattern_str == pattern_in_flat {
-                return pattern.1;
-            }
-        }
-        abort!(
-            span,
-            "'{}' is not a valid pattern.  See documentation for list of patterns.",
-            s
-        );
     }
 
     match (
@@ -585,7 +591,6 @@ fn execute_token_eq(
     stream: impl IntoIterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
 ) {
-    let mut args = stream.into_iter();
     struct TtWrapper(TokenTree);
     impl PartialEq for TtWrapper {
         fn eq(&self, other: &Self) -> bool {
@@ -611,9 +616,11 @@ fn execute_token_eq(
         a.delimiter() == b.delimiter() && stream_eq(a.stream(), b.stream())
     }
 
+    let mut args = stream.into_iter();
+
     let mut prev = None;
     for i in 0.. {
-        let name = format!("arg_{}", i);
+        let name = format!("arg_{i}");
         let next = expect_group(args.next_or(span), Param::Named(&name)).unwrap_or_abort();
         if let Some(prev) = prev.take() {
             if !group_eq(&prev, &next) {
@@ -717,5 +724,5 @@ fn execute_unstringify(
     #[cfg(feature = "trace_macros")]
     proc_macro_error2::emit_call_site_warning!("unstringify result:{}", unstrung);
 
-    unprocessed.push(unstrung.into_iter())
+    unprocessed.push(unstrung.into_iter());
 }

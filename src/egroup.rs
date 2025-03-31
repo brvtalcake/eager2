@@ -73,7 +73,8 @@ impl ToTokens for EfficientGroupV {
         match self {
             Self::Raw(g) => g.to_tokens(tokens),
             Self::Processed(s) => {
-                Group::new(Delimiter::Bracket, s.iter().cloned().collect()).to_tokens(tokens)
+                let group = Group::new(Delimiter::Bracket, s.iter().cloned().collect());
+                group.to_tokens(tokens);
             }
         }
     }
@@ -81,7 +82,7 @@ impl ToTokens for EfficientGroupV {
 
 impl EfficientGroupV {
     pub fn push(&mut self, tt: TokenTree) {
-        self.as_mut_vec().push(tt)
+        self.as_mut_vec().push(tt);
     }
 
     pub fn as_mut_vec(&mut self) -> &mut Vec<TokenTree> {

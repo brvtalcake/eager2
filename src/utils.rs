@@ -123,6 +123,7 @@ pub fn eat_zero_group(tt: TokenTree) -> TokenTree {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 pub fn expect_punct(tt: Result<TokenTree, Span>, c: impl IsPunct) -> Result<Punct, Diagnostic> {
     match tt.map(eat_zero_group) {
         Err(span) => Err(diagnostic!(
