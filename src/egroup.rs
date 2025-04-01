@@ -1,6 +1,6 @@
 use std::mem;
 
-use proc_macro2::{Delimiter, Group, TokenStream, TokenTree, token_stream};
+use proc_macro2::{token_stream, Delimiter, Group, TokenStream, TokenTree};
 use quote::ToTokens;
 
 pub enum EfficientGroup<P> {

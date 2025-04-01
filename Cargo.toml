@@ -2,7 +2,7 @@
 name = "eager2"
 version = "1.0.0"
 authors = ["Daniel Bloom"]
-edition = "2024"
+edition = "2021"
 categories = ["development-tools"]
 description = "Proc-macros for eager macro expansion"
 documentation = "https://docs.rs/eager2"

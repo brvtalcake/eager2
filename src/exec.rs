@@ -4,9 +4,9 @@ use std::str::FromStr;
 use std::{env, fs, io};
 
 use litrs::{BoolLit, Literal as Litrl};
-use proc_macro_error2::ResultExt;
+use proc_macro2::{token_stream, Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree};
 use proc_macro_error2::abort;
-use proc_macro2::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree, token_stream};
+use proc_macro_error2::ResultExt;
 
 use crate::egroup::EfficientGroupV;
 #[allow(clippy::wildcard_imports)]
@@ -447,7 +447,7 @@ fn case_value_parser(span: Span, s: &str) -> convert_case::Case {
 }
 
 fn pattern_value_parser(span: Span, s: &str) -> convert_case::pattern::Pattern {
-    use convert_case::{Case, Casing, pattern::Pattern};
+    use convert_case::{pattern::Pattern, Case, Casing};
 
     const ALL_PATTERNS: &[(&str, Pattern)] = &{
         use convert_case::pattern;

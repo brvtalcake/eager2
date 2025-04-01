@@ -2,9 +2,9 @@ use std::borrow::Cow;
 use std::str::FromStr;
 
 use litrs::Literal;
-use proc_macro_crate::{FoundCrate, crate_name};
-use proc_macro_error2::{Diagnostic, Level, abort_call_site, diagnostic};
 use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro_crate::{crate_name, FoundCrate};
+use proc_macro_error2::{abort_call_site, diagnostic, Diagnostic, Level};
 use quote::quote;
 
 const EAGER2_IDENT: &str = "__eager2_ident_hyR7dMdkMPcptU6h21dioFE3EhoLprgj";
