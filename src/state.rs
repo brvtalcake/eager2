@@ -1,9 +1,9 @@
 use std::mem;
 
 use litrs::Literal;
+use proc_macro2::{token_stream, Delimiter, Group, Ident, Spacing, Span, TokenStream, TokenTree};
 use proc_macro_error2::abort;
 use proc_macro_error2::{Diagnostic, ResultExt};
-use proc_macro2::{Delimiter, Group, Ident, Spacing, Span, TokenStream, TokenTree, token_stream};
 use quote::{ToTokens, TokenStreamExt};
 
 use crate::egroup::{EfficientGroupT, EfficientGroupV};
@@ -33,7 +33,11 @@ impl TryFrom<&'_ str> for Mode {
 
 impl Mode {
     pub fn eager(b: bool) -> Self {
-        if b { Self::Eager } else { Self::Lazy }
+        if b {
+            Self::Eager
+        } else {
+            Self::Lazy
+        }
     }
     fn from(span: Span, t: Option<TokenTree>) -> Self {
         let i = match t {
@@ -471,6 +475,7 @@ impl State {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn process(
         mut self,
         found_crate: &str,

@@ -1,7 +1,7 @@
 use std::iter::Peekable;
 
-use proc_macro_error2::{ResultExt, abort, abort_call_site};
-use proc_macro2::{Delimiter, Group, Ident, Spacing, Span, TokenStream, TokenTree, token_stream};
+use proc_macro2::{token_stream, Delimiter, Group, Ident, Spacing, Span, TokenStream, TokenTree};
+use proc_macro_error2::{abort, abort_call_site, ResultExt};
 use quote::quote;
 
 #[allow(clippy::wildcard_imports)]
