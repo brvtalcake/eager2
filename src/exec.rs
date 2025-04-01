@@ -298,7 +298,7 @@ fn execute_option_env(
             processed_out.push(group.into());
         }
         Err(env::VarError::NotPresent) => processed_out.push(Ident::new("None", span).into()),
-    };
+    }
 }
 
 fn execute_file(

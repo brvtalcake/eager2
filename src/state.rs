@@ -470,7 +470,8 @@ impl State {
             unprocessed: vec![stream.into_iter()],
         }
     }
-
+    
+    #[allow(clippy::result_large_err)]
     pub fn process(
         mut self,
         found_crate: &str,
