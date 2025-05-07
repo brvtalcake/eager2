@@ -71,6 +71,17 @@ pub fn get_string_literal(l: pm::Literal) -> Option<String> {
     }
 }
 
+pub fn get_usize_literal(l: pm::Literal) -> Option<usize> {
+    if let Literal::Integer(i) = Literal::from(l) {
+        match i.suffix() {
+            "" | "usize" => i.value(),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
 pub fn expect_string_literal(
     tt: Result<TokenTree, Span>,
     s: Param<&str>,

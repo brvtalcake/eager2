@@ -4,6 +4,7 @@ use crate::{
     consts::{EAGER_SIGIL, LAZY_SIGIL},
     pm::{token_stream, Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenTree},
     state::Mode,
+    utils::NextOr,
     Error, Note,
 };
 
@@ -11,11 +12,13 @@ pub type ExpectCallLiteral = fn(Result<TokenTree, Span>) -> bool;
 pub type ExpectStringLiteral =
     fn(Result<TokenTree, Span>, Param<&str>) -> Result<(String, Span), Error>;
 pub type GetStringLiteral = fn(Literal) -> Option<String>;
+pub type GetUsizeLiteral = fn(Literal) -> Option<usize>;
 
 pub struct Fns {
     pub expect_call_literal: ExpectCallLiteral,
     pub expect_string_literal: ExpectStringLiteral,
     pub get_string_literal: GetStringLiteral,
+    pub get_usize_literal: GetUsizeLiteral,
 }
 
 pub static FNS: OnceLock<Fns> = OnceLock::new();
@@ -24,6 +27,7 @@ pub fn expect_call_literal(tt: Result<TokenTree, Span>) -> bool {
     (FNS.get().unwrap().expect_call_literal)(tt)
 }
 
+#[derive(Clone, Copy)]
 pub enum Param<'a, V> {
     Named(&'a str),
     ExactValue(V),
@@ -32,6 +36,11 @@ pub enum Param<'a, V> {
 impl<V> From<V> for Param<'_, V> {
     fn from(v: V) -> Self {
         Self::ExactValue(v)
+    }
+}
+impl<'a> From<&'a str> for Param<'a, usize> {
+    fn from(v: &'a str) -> Self {
+        Self::Named(v)
     }
 }
 impl<'a> From<&'a str> for Param<'a, Delimiter> {
@@ -238,6 +247,70 @@ pub fn expect_string_literal<'a, 'b>(
     s: impl Into<Param<'a, &'b str>>,
 ) -> Result<(String, Span), Error> {
     (FNS.get().unwrap().expect_string_literal)(tt, s.into())
+}
+
+pub fn expect_usize_literal<'a>(
+    tt: Result<TokenTree, Span>,
+    s: impl Into<Param<'a, usize>>,
+) -> Result<(usize, Span), Error> {
+    expect_usize_literal_impl(tt, s.into())
+}
+
+fn expect_usize_literal_impl(
+    tt: Result<TokenTree, Span>,
+    s: Param<usize>,
+) -> Result<(usize, Span), Error> {
+    let tt = match (tt.map(eat_zero_group), s) {
+        (Err(span), Param::ExactValue(s)) => {
+            return Err(Error {
+                span,
+                msg: "unexpected end of macro invocation".into(),
+                note: Some(Note {
+                    span: None,
+                    msg: format!("while trying to match usize `{s:?}`").into(),
+                }),
+            })
+        }
+        (Err(span), Param::Named(s)) => {
+            return Err(Error {
+                span,
+                msg: "unexpected end of macro invocation".into(),
+                note: Some(Note {
+                    span: None,
+                    msg: format!("while trying to match usize `${s}:literal`").into(),
+                }),
+            })
+        }
+
+        (Ok(TokenTree::Literal(l)), Param::ExactValue(s)) => {
+            if let Some(v) = (FNS.get().unwrap().get_usize_literal)(l.clone()) {
+                if v == s {
+                    return Ok((v, l.span()));
+                }
+            }
+            TokenTree::Literal(l)
+        }
+        (Ok(TokenTree::Literal(l)), Param::Named(_)) => {
+            if let Some(v) = (FNS.get().unwrap().get_usize_literal)(l.clone()) {
+                return Ok((v, l.span()));
+            }
+            TokenTree::Literal(l)
+        }
+
+        (Ok(tt), _) => tt,
+    };
+    match s {
+        Param::ExactValue(s) => Err(Error {
+            span: tt.span(),
+            msg: format!("expected usize literal `{s}`").into(),
+            note: None,
+        }),
+        Param::Named(s) => Err(Error {
+            span: tt.span(),
+            msg: format!("expected usize `${s}:literal`").into(),
+            note: None,
+        }),
+    }
 }
 
 pub fn expect_mode<'a>(
@@ -560,4 +633,44 @@ impl<'a> MacroPathSegments<'a> {
             };
         }
     }
+}
+
+pub fn check_is_path(span: Span, tokens: impl IntoIterator<Item = TokenTree>) -> Result<(), Error> {
+    check_is_path_impl(span, &mut tokens.into_iter())
+}
+fn check_is_path_impl(
+    span: Span,
+    mut tokens: &mut dyn Iterator<Item = TokenTree>,
+) -> Result<(), Error> {
+    match tokens.next() {
+        None => {
+            return Err(Error {
+                span,
+                msg: "unexpected end of macro invocation".into(),
+                note: Some(Note {
+                    span: None,
+                    msg: "expected path".into(),
+                }),
+            })
+        }
+        Some(TokenTree::Punct(p)) if p.as_char() == ':' && p.spacing() == Spacing::Joint => {
+            expect_punct(tokens.next_or(span), ':')?;
+            expect_ident(tokens.next_or(span), Param::Named("path_segment"))?;
+        }
+        Some(TokenTree::Ident(_)) => {}
+        Some(tt) => {
+            return Err(Error {
+                span: tt.span(),
+                msg: "expected path starting with ident or `:`".into(),
+                note: None,
+            })
+        }
+    };
+
+    while let Some(token) = tokens.next() {
+        expect_punct(Ok(token), (':', Spacing::Joint))?;
+        expect_punct(tokens.next_or(span), ':')?;
+        expect_ident(tokens.next_or(span), Param::Named("path_segment"))?;
+    }
+    Ok(())
 }

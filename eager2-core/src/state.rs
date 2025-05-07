@@ -227,6 +227,7 @@ impl TrailingMacro {
     fn mode(&self) -> Option<Mode> {
         match self {
             TrailingMacro::ModeSwitch(m) => Some(m.mode),
+            TrailingMacro::Exec(d) if d.exec == ExecutableMacroType::DelayEager => Some(Mode::Lazy),
             _ => None,
         }
     }
@@ -238,9 +239,8 @@ impl ModeSwitchTrailingMacro {
     }
 }
 impl ExecutableTrailingMacro {
-    fn truncate(self, tokens: &mut Vec<TokenTree>) -> ExecutableMacroType {
-        tokens.truncate(self.offset);
-        self.exec
+    fn truncate(self, tokens: &mut Vec<TokenTree>) -> (Vec<TokenTree>, ExecutableMacroType) {
+        (tokens.split_off(self.offset), self.exec)
     }
 }
 impl UnknownTrailingMacro {
@@ -472,7 +472,7 @@ impl State {
 
             let tm = match tm {
                 Ok(tm) => tm,
-                Err(suspend) => {
+                Err(suspend) if self.mode == Mode::Eager => {
                     suspend.truncate(self.processed.as_mut_vec());
                     let locked = EfficientGroupT::Processed(g.stream());
                     if self.has_locking() {
@@ -482,6 +482,16 @@ impl State {
                         self.free.append(self.processed.take());
                         self.locked = locked;
                     }
+                    continue;
+                }
+                Err(_) => {
+                    self.processed.push(TokenTree::Group(g));
+                    if self.has_locking() {
+                        self.locked.append(self.processed.take());
+                    } else {
+                        self.free.append(self.processed.take());
+                    }
+
                     continue;
                 }
             };
@@ -557,7 +567,7 @@ impl State {
             }
             // Execute known macros
             (Some(Exec(tm)), Mode::Eager) => {
-                let macro_type = tm.truncate(self.processed.as_mut_vec());
+                let (macro_path, macro_type) = tm.truncate(self.processed.as_mut_vec());
                 let stream = stack
                     .free
                     .into_iter()
@@ -565,6 +575,8 @@ impl State {
                     .chain(stack.processed);
 
                 macro_type.execute(
+                    macro_path,
+                    stack.delim,
                     stack.span,
                     stream,
                     &mut self.processed,

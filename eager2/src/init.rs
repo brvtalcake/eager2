@@ -2,7 +2,7 @@ use eager2_core::{exec, parse};
 
 use crate::{
     exec::{execute_ccase, execute_concat},
-    parse::{expect_call_literal, expect_string_literal, get_string_literal},
+    parse::{expect_call_literal, expect_string_literal, get_string_literal, get_usize_literal},
 };
 
 pub fn init() {
@@ -10,6 +10,7 @@ pub fn init() {
         expect_call_literal,
         expect_string_literal,
         get_string_literal,
+        get_usize_literal,
     });
     let _ = exec::FNS.set(exec::Fns {
         execute_concat,

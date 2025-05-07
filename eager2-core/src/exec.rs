@@ -9,9 +9,13 @@ use crate::{
     consts::eager_call_sigil,
     egroup::EfficientGroupV,
     parse::{
-        eat_zero_group, expect_group, expect_ident, expect_punct, expect_string_literal, Param,
+        eat_zero_group, expect_group, expect_ident, expect_punct, expect_string_literal,
+        expect_usize_literal, Param,
     },
-    pm::{token_stream, Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree},
+    pm::{
+        token_stream, Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream,
+        TokenTree,
+    },
     rules::expand_rules_legacy,
     utils::{NextOr, PopNext},
     Error,
@@ -44,6 +48,7 @@ pub enum ExecutableMacroType {
     Stringify,
 
     CCase,
+    DelayEager,
     EagerCoalesce,
     EagerIf,
     EagerMacroRules,
@@ -70,6 +75,7 @@ impl TryFrom<&str> for ExecutableMacroType {
             "stringify" => Self::Stringify,
 
             "ccase" => Self::CCase,
+            "delay_eager" => Self::DelayEager,
             "eager_coalesce" => Self::EagerCoalesce,
             "eager_if" => Self::EagerIf,
             "eager_macro_rules" => Self::EagerMacroRules,
@@ -84,17 +90,28 @@ impl TryFrom<&str> for ExecutableMacroType {
 impl ExecutableMacroType {
     pub fn execute(
         self,
+        macro_path: Vec<TokenTree>,
+        delim: Delimiter,
         span: Span,
         stream: impl IntoIterator<Item = TokenTree>,
         processed: &mut EfficientGroupV,
         unprocessed: &mut Vec<token_stream::IntoIter>,
     ) -> Result<(), Error> {
-        self.execute_impl(span, &mut stream.into_iter(), processed, unprocessed)
+        self.execute_impl(
+            span,
+            macro_path,
+            delim,
+            &mut stream.into_iter(),
+            processed,
+            unprocessed,
+        )
     }
 
     fn execute_impl(
         self,
         span: Span,
+        macro_path: Vec<TokenTree>,
+        delim: Delimiter,
         args: &mut dyn Iterator<Item = TokenTree>,
         processed: &mut EfficientGroupV,
         unprocessed: &mut Vec<token_stream::IntoIter>,
@@ -125,6 +142,7 @@ impl ExecutableMacroType {
                 (fexecs.execute_ccase)(span, args, processed)
             }
             Self::EagerCoalesce => execute_eager_coalesce(span, args, processed),
+            Self::DelayEager => execute_delay_eager(macro_path, delim, span, args, processed),
             Self::EagerIf => execute_eager_if(span, args, unprocessed),
             Self::EagerMacroRules => execute_eager_macro_rules(span, args, processed),
             Self::TokenEq => execute_token_eq(span, args, processed),
@@ -399,14 +417,60 @@ fn execute_module_path(
     })
 }
 
-fn execute_eager_coalesce(
+fn execute_delay_eager(
+    macro_path: Vec<TokenTree>,
+    delim: Delimiter,
     span: Span,
     mut args: &mut dyn Iterator<Item = TokenTree>,
     processed_out: &mut EfficientGroupV,
 ) -> Result<(), Error> {
+    let tt = args.next_or(span);
+
+    // This is a hack until we can make `$crate` on our own
+    let sigil = expect_punct(tt.clone(), '@').ok();
+    let (macro_path, tt) = if sigil.is_some() {
+        let macro_path = expect_group(args.next_or(span), Delimiter::Brace)?;
+        (EfficientGroupV::Raw(macro_path), args.next_or(span))
+    } else {
+        (EfficientGroupV::Processed(macro_path), tt)
+    };
+
+    let (delay, delay_span) = expect_usize_literal(tt, "delay")?;
+    let comma = expect_punct(args.next_or(span), ',')?;
+
+    if delay == 0 {
+        processed_out.extend(args);
+        return Ok(());
+    }
+
+    let delay = delay - 1;
+    let mut delay = Literal::usize_unsuffixed(delay);
+    delay.set_span(delay_span);
+
+    processed_out.append(macro_path.clone());
+
+    let stream = [
+        Punct::new('@', Spacing::Joint).into(),
+        macro_path.to_group(Delimiter::Brace).into(),
+        delay.into(),
+        comma.into(),
+    ]
+    .into_iter()
+    .chain(args)
+    .collect();
+    let group = Group::new(delim, stream);
+    processed_out.push(group.into());
+    Ok(())
+}
+
+fn execute_eager_coalesce(
+    _span: Span,
+    args: &mut dyn Iterator<Item = TokenTree>,
+    processed_out: &mut EfficientGroupV,
+) -> Result<(), Error> {
     let mut looking = true;
-    loop {
-        let group = expect_group(args.next_or(span), Param::Named("arg"))?.stream();
+    while let Some(tt) = args.next() {
+        let group = expect_group(Ok(tt), Param::Named("arg"))?.stream();
         if looking && !group.is_empty() {
             // Process the rest for syntax check
             looking = false;

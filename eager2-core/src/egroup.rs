@@ -2,6 +2,7 @@ use std::mem;
 
 use crate::pm::{token_stream, Delimiter, Group, ToTokens, TokenStream, TokenTree};
 
+#[derive(Clone)]
 pub enum EfficientGroup<P> {
     Raw(Group),
     Processed(P),
@@ -18,6 +19,18 @@ impl<P> From<Group> for EfficientGroup<P> {
         Self::Raw(g)
     }
 }
+impl<P: IntoIterator<Item = TokenTree>> EfficientGroup<P> {
+    pub fn to_group(self, d: Delimiter) -> Group {
+        match self {
+            Self::Raw(r) => {
+                debug_assert_eq!(r.delimiter(), d);
+                r
+            }
+            Self::Processed(p) => Group::new(d, p.into_iter().collect()),
+        }
+    }
+}
+
 pub enum EgIntoIter<P: IntoIterator<Item = TokenTree>> {
     Raw(token_stream::IntoIter),
     Processed(P::IntoIter),

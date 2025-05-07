@@ -1,5 +1,6 @@
 use crate::{
     consts::eager_call_sigil,
+    parse::check_is_path,
     pm::{Delimiter, Group, Ident, Punct, Spacing, Span, ToTokens, TokenStream},
     state::{Mode, State},
     Error,
@@ -15,6 +16,14 @@ pub fn eager_wrap(stream: TokenStream, name: &str) -> Result<TokenStream, Error>
     Punct::new('!', Spacing::Alone).to_tokens(&mut tokens);
     Group::new(Delimiter::Brace, stream).to_tokens(&mut tokens);
     eval_helper(tokens, true)
+}
+
+pub fn lazy_apply(mut attrs: TokenStream, item: TokenStream) -> Result<TokenStream, Error> {
+    check_is_path(Span::call_site(), attrs.clone())?;
+    Punct::new('!', Spacing::Alone).to_tokens(&mut attrs);
+    Group::new(Delimiter::Brace, item).to_tokens(&mut attrs);
+
+    Ok(attrs)
 }
 
 fn eval_helper(stream: TokenStream, eager: bool) -> Result<TokenStream, Error> {

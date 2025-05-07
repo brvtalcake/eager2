@@ -1,9 +1,10 @@
 //!
-//! This crate contains five core macros used to simulate eager macro expansion:
+//! This crate contains six core macros used to simulate eager macro expansion:
 //!
 //! * [`eager!`]: Switches the macro-environment to eager-mode.
 //! * [`lazy!`]: Switches the macro-environment to lazy-mode.
 //! * [`suspend_eager!`]: Locks the macro-environment in lazy-mode.
+//! * [`delay_eager!`]: Delays expansion for a specified # of iterations.
 //! * [`#[eager_macro]`][macro@eager_macro]: Declares an eager-enabled macro.
 //! * [`eager_macro_rules!`]: The legacy way to declares one or more eager-enabled macro.
 //!
@@ -86,8 +87,8 @@
 //!
 //! ## Switching Environments
 //!
-//! The three macros which control the current environment are `eager!`, `lazy!`, and
-//! `suspend_eager!`. They work as follows
+//! The four macros which control the current environment are `eager!`, `lazy!`, `suspend_eager!`,
+//! and `delay_eager`. They work as follows
 //! ```
 //! // The default rust environment is lazy
 //! # use eager2::eager;
@@ -117,9 +118,9 @@
 //!             // Back to lazy
 //!
 //!             eager2::eager!{
-//!                 // Still lazy, but note that `eager!{...}` is going
-//!                 // to be a part of the final expansion, and so will
-//!                 // become eager during that evaluation.
+//!                 // Still lazy, but note that `eager!{...}` is going to be a part
+//!                 // of the final expansion, and so will become eager during that
+//!                 // evaluation.
 //!                 //
 //!                 // The use of `eager2::` prefix is because `mod foo` does not
 //!                 // import `eager`. This is something to be aware of when mixing
@@ -127,7 +128,13 @@
 //!             }
 //!         
 //!         }
+//!
 //!         // Back to eager
+//!
+//!         eager2::delay_eager!{5,
+//!             // Lazy, but note the above `eager2::` prefix as `delay_eager` will
+//!             // expand recursively into itself until the `delay` parameter is 0.
+//!         }
 //!     }
 //! }
 //! ```
@@ -199,6 +206,7 @@
 
 use proc_macro::TokenStream;
 
+mod apply;
 mod exec;
 mod impls;
 mod init;
@@ -322,6 +330,80 @@ pub fn eager_macro_rules(stream: TokenStream) -> TokenStream {
 pub fn eager_macro(attr: TokenStream, stream: TokenStream) -> TokenStream {
     #[allow(clippy::useless_conversion)]
     rules::eager_macro(attr.into(), stream.into()).into()
+}
+
+/// Apply a specified macro to the annotated item. This is mostly syntax sugar, but eventually it
+/// may be possible to use this as in inner attribute to control the macro expansion order more
+/// granularly.
+///
+/// # Examples
+///
+/// ```
+/// use eager2::{eager, lazy, lazy_apply};
+///
+/// // Macro that renames a module.
+/// macro_rules! rename_mod {
+///     (
+///         $(#[$mod_meta:meta])* // Preserve other meta items
+///         $mod_vis:vis // Preserve visibility
+///         mod $old_name:ident {
+///             // Use a fake macro call to pass any metadata to this macro without syntax check
+///             metadata!{
+///                 name: $new_name:ident$(,)?
+///             }
+///             $($content:tt)*
+///         }
+///     ) => {
+///         $(#[$mod_meta])*
+///         $mod_vis
+///         mod $new_name {
+///             $($content)*
+///         }
+///     }
+/// }
+///
+/// // Call the macro in the normal way
+/// rename_mod!{mod foo {
+///     metadata!{name: bar}
+///     pub const VALUE: u32 = 10;
+/// }}
+///
+/// // Call the macro `rename_mod` on the module `bar`
+/// #[lazy_apply(rename_mod)]
+/// mod bar {
+///     metadata!{name: foo}
+///     pub const VALUE: u32 = 20;
+/// }
+///
+/// assert_eq!(foo::VALUE, 20);
+/// assert_eq!(bar::VALUE, 10);
+///
+/// macro_rules! make_mod {
+///     ($($k:ident: $v:tt),+ $(,)?) => {lazy!{
+///         // `lazy_apply` is an attribute, which is never eagerly evaluated, plus we're in `lazy`
+///         // mode. As such, `eager_if` will evaluate first, then `rename_mod` will be called on
+///         // that expanded output.
+///         #[lazy_apply(rename_mod)]
+///         mod __unnamed {
+///             metadata!{eager!{
+///                 $(eager_if![token_eq!({$k}, {name})]{
+///                     name: $v,
+///                 }{})*
+///             }}
+///
+///             pub const VALUE: u32 = 30;
+///         }
+///     }};
+/// }
+/// make_mod!{foo: 10, name: baz, bar: {"ignored"}}
+/// assert_eq!(baz::VALUE, 30);
+///
+///
+/// ```
+#[proc_macro_attribute]
+pub fn lazy_apply(attr: TokenStream, stream: TokenStream) -> TokenStream {
+    #[allow(clippy::useless_conversion)]
+    apply::lazy_apply(attr.into(), stream.into()).into()
 }
 
 /// [[eager!](macro.eager.html)] Emulates eager expansion of macros.
@@ -575,11 +657,60 @@ pub fn lazy(stream: TokenStream) -> TokenStream {
 ///
 /// For more information on environments, see [the crate-level documentation][environments].
 ///
+/// # Examples
+///
+/// ```compile_fail
+/// // Fails because `lazy` means `suspend_eager!` won't be erased, but hasn't been imported
+/// eager2::lazy!{suspend_eager!{}}
+/// ```
+///
+/// ```
+/// // Works because `eager2::suspend_eager` isn't erased, but is accessible.
+/// eager2::lazy!{eager2::suspend_eager!{}}
+/// ```
+///
+/// ```
+/// // Works because `eager` means `suspend_eager` is erased.
+/// eager2::eager!{suspend_eager!{}}
+/// ```
 /// [environments]: ./index.html#environments
 #[proc_macro]
 pub fn suspend_eager(stream: TokenStream) -> TokenStream {
     #[allow(clippy::useless_conversion)]
     impls::eager_wrap(stream.into(), "suspend_eager").into()
+}
+
+/// [[eager!](macro.eager.html)] Expands into args if `delay` is 0, else decrements delay.
+///
+/// ## Syntax
+/// ```
+/// macro_rules! delay_eager {
+///     (
+///         $delay:literal, $($args:tt)*
+///     ) => { /* proc-macro */ };
+/// }
+/// ```
+///
+/// Takes a single literal `usize`, followed by a comma and the desired result tokens. Useful for
+/// controlling expansion order. When trying to match the output of `delay_eager!`, note that it can
+/// sometimes emit `delay_eager!{@$_internal:tt $delay:literal, $($args)*}`. This `_internal` data
+/// is an implementation detail that will hopefully be removed in the future and can be ignored
+/// simply by matching `$(@ $_:tt)?`.
+///
+/// # Examples
+///
+/// ```
+/// use eager2::{eager, delay_eager};
+///
+/// eager!{
+///     delay_eager!{5, let v = 10;}
+/// }
+/// assert_eq!(v, 10);
+/// ```
+#[proc_macro]
+pub fn delay_eager(stream: TokenStream) -> TokenStream {
+    #[allow(clippy::useless_conversion)]
+    impls::eager_wrap(stream.into(), "delay_eager").into()
 }
 
 /// 🚧 Not yet implemented!
