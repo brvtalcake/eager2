@@ -12,6 +12,30 @@ use crate::{
 };
 
 #[derive(Clone)]
+enum MacroKind {
+    /// `macro_rules! <macro-name> { ... }`
+    DeclMacro1,
+    /// `pub? macro <macro-name> ...`
+    DeclMacro2 { visibility: TokenStream },
+}
+
+impl MacroKind {
+    fn is_v1(&self) -> bool {
+        matches!(self, Self::DeclMacro1)
+    }
+    fn is_v2(&self) -> bool {
+        matches!(self, Self::DeclMacro2 { .. })
+    }
+
+    fn vis_mut(&mut self) -> Option<&mut TokenStream> {
+        match self {
+            Self::DeclMacro1 => None,
+            Self::DeclMacro2 { visibility } => Some(visibility),
+        }
+    }
+}
+
+#[derive(Clone)]
 struct Rule {
     grammar: Group,
     expansion: Group,
@@ -95,10 +119,10 @@ impl ToTokens for Rule {
         Punct::new('=', Spacing::Joint).to_tokens(tokens);
         Punct::new('>', Spacing::Alone).to_tokens(tokens);
         self.expansion.to_tokens(tokens);
-        Punct::new(';', Spacing::Alone).to_tokens(tokens);
     }
 }
 pub struct Rules {
+    kind: MacroKind,
     metas: Vec<TokenTree>,
     macro_name: Ident,
     eager: Vec<Rule>,
@@ -107,17 +131,31 @@ pub struct Rules {
 impl ToTokens for Rules {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.extend(self.metas.iter().cloned());
-        Ident::new("macro_rules", Span::call_site()).to_tokens(tokens);
-        Punct::new('!', Spacing::Alone).to_tokens(tokens);
-        self.macro_name.to_tokens(tokens);
+
+        let separator = match &self.kind {
+            MacroKind::DeclMacro1 => {
+                Ident::new("macro_rules", Span::call_site()).to_tokens(tokens);
+                Punct::new('!', Spacing::Alone).to_tokens(tokens);
+                self.macro_name.to_tokens(tokens);
+                Punct::new(';', Spacing::Alone)
+            }
+            MacroKind::DeclMacro2 { visibility } => {
+                tokens.extend(visibility.clone());
+                Ident::new("macro", Span::call_site()).to_tokens(tokens);
+                self.macro_name.to_tokens(tokens);
+                Punct::new(',', Spacing::Alone)
+            }
+        };
 
         let mut rules = TokenStream::new();
         for rule in &self.eager {
             rule.to_tokens(&mut rules);
+            separator.to_tokens(&mut rules);
         }
         // Put the pure version after so eager is always tried first
         for rule in &self.pure {
             rule.to_tokens(&mut rules);
+            separator.to_tokens(&mut rules);
         }
         Group::new(Delimiter::Brace, rules).to_tokens(tokens);
     }
@@ -131,15 +169,16 @@ pub fn expand_rules(
     stream: &mut Peekable<&mut dyn Iterator<Item = TokenTree>>,
 ) -> Result<Rules, Error> {
     let mut metas = vec![];
+    let mut kind = MacroKind::DeclMacro1;
     loop {
         match stream.peek() {
             None => {
                 return Err(Error {
                     span,
-                    msg: "unexpected end of macro invocation".into(),
+                    msg: "unexpected end of input".into(),
                     note: Some(crate::Note {
                         span: None,
-                        msg: "while trying to match token `#` or ident `macro_rules`".into(),
+                        msg: "while trying to match start of macro definition".into(),
                     }),
                 })
             }
@@ -150,19 +189,110 @@ pub fn expand_rules(
                 let g = expect_group(stream.next_or(span), Delimiter::Bracket)?;
                 metas.push(g.into());
             }
-            Some(TokenTree::Ident(i)) if i.to_string() == "macro_rules" => break,
-            Some(t) => {
-                return Err(Error {
-                    span: t.span(),
-                    msg: "expected token `#` or or ident `macro_rules`".into(),
-                    note: None,
-                })
+            Some(TokenTree::Ident(i)) if i.to_string() == "macro_rules" => match &kind {
+                MacroKind::DeclMacro1 => break,
+                MacroKind::DeclMacro2 { visibility } => {
+                    return Err(Error {
+                        span: i.span(),
+                        msg: "expected ident `macro`".into(),
+                        note: Some(crate::Note {
+                            span: visibility.clone().into_iter().next().map(|tt| tt.span()),
+                            msg: "previously matched a visibility specifier".into(),
+                        }),
+                    })
+                }
+            },
+            Some(TokenTree::Ident(i)) if i.to_string() == "macro" => {
+                if kind.is_v1() {
+                    kind = MacroKind::DeclMacro2 {
+                        visibility: TokenStream::new(),
+                    };
+                }
+                break;
             }
+            Some(TokenTree::Ident(i)) if i.to_string() == "pub" => {
+                kind = MacroKind::DeclMacro2 {
+                    visibility: TokenStream::new(),
+                };
+                let visibility = kind.vis_mut().unwrap();
+
+                let p = stream.next().unwrap();
+                visibility.extend([p].iter().cloned());
+
+                match stream.peek() {
+                    Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis => {
+                        // TODO: verify that we got valid tokens, e.g. `crate`, `super` or `in <path>`
+                        let vis_cont = stream.next().unwrap();
+                        visibility.extend([vis_cont].iter().cloned());
+                    }
+                    Some(TokenTree::Ident(i)) if i.to_string() == "macro" => {
+                        continue;
+                    }
+                    Some(tt) => {
+                        return Err(Error {
+                            span: tt.span(),
+                            msg:
+                                "expected visibility specifier (e.g. `pub(crate)`) or ident `macro`"
+                                    .into(),
+                            note: None,
+                        });
+                    }
+                    None => {
+                        return Err(Error {
+                            span,
+                            msg: "unexpected end of input".into(),
+                            note: Some(crate::Note {
+                                span: None,
+                                msg: "while trying to match start of macro definition".into(),
+                            }),
+                        })
+                    }
+                };
+            }
+            Some(t) => return Err(Error {
+                span: t.span(),
+                msg:
+                    "expected token `#`, ident `macro_rules`, visibility specifier or ident `macro`"
+                        .into(),
+                note: None,
+            }),
         }
     }
-    let _macro_rules = stream.next().unwrap();
-    expect_punct(stream.next_or(span), '!')?;
+    let _macro_rules_or_macro = stream.next().unwrap();
+    if kind.is_v1() {
+        expect_punct(stream.next_or(span), '!')?;
+    }
     let macro_name = expect_ident(stream.next_or(span), Param::Named("macro_name"))?;
+
+    let delim;
+    if kind.is_v2() {
+        delim = ',';
+        if stream.peek().is_some_and(
+            |tt| matches!(tt, TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis),
+        ) {
+            let grammar = expect_group(
+                stream.next().ok_or_else(|| unreachable!()),
+                Param::Named("grammar"),
+            )?;
+
+            let expansion = expect_group(stream.next_or(span), Param::Named("expansion"))?;
+
+            let rule = Rule { grammar, expansion };
+
+            return Ok(Rules {
+                kind,
+                metas,
+                macro_name,
+                eager: [rule
+                    .clone()
+                    .make_eager(crate_path, eager_call_sigil, hidden_ident)]
+                .to_vec(),
+                pure: [rule].to_vec(),
+            });
+        }
+    } else {
+        delim = ';';
+    }
 
     let group = expect_group(stream.next_or(span), Delimiter::Brace)?;
 
@@ -182,7 +312,7 @@ pub fn expand_rules(
         rules.push(Rule { grammar, expansion });
 
         let Some(tt) = stream.next() else { break };
-        expect_punct(Ok(tt), ';')?;
+        expect_punct(Ok(tt), delim)?;
     }
 
     let eager_rules = rules
@@ -193,6 +323,7 @@ pub fn expand_rules(
     let pure_rules = rules;
 
     Ok(Rules {
+        kind,
         metas,
         macro_name,
         eager: eager_rules,
