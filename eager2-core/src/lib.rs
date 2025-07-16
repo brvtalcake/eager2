@@ -1,5 +1,5 @@
 //! This library is not meant for public consumption
-
+#![feature(iter_intersperse)] // should soon be stabilized
 #![doc(hidden)]
 
 use std::borrow::Cow;
@@ -9,6 +9,8 @@ extern crate proc_macro;
 
 #[cfg(not(feature = "testing"))]
 pub mod pm {
+    use std::ops::Add;
+
     pub use proc_macro::{
         token_stream, Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream,
         TokenTree,
@@ -50,6 +52,18 @@ pub mod pm {
     impl ToTokens for TokenTree {
         fn to_tokens(&self, tokens: &mut TokenStream) {
             tokens.extend([self.clone()]);
+        }
+    }
+    impl ToTokens for TokenStream {
+        fn to_tokens(&self, tokens: &mut TokenStream) {
+            tokens.extend([self.clone()]);
+        }
+    }
+    impl<const N: usize, T: ToTokens> ToTokens for [T; N] {
+        fn to_tokens(&self, tokens: &mut TokenStream) {
+            for item in self {
+                item.to_tokens(tokens);
+            }
         }
     }
 }
