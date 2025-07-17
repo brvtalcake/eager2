@@ -174,7 +174,7 @@ impl ToTokens for EagerProcMacro {
                     )
                 )
             }
-        }.into()] as [TokenStream; _]);
+        }.into()] as [TokenStream; 1]);
     }
 }
 
@@ -358,7 +358,7 @@ fn expand_proc_macro(
                     other => attributes.push(other),
                 }
             }
-            tt @ TokenTree2::Ident(i) if i.to_string() == "pub" => {
+            tt @ TokenTree2::Ident(i) if *i == "pub" => {
                 if visibility.is_some() {
                     return Err(err_token_custom!(
                         tt.clone(),
@@ -394,7 +394,7 @@ fn expand_proc_macro(
                     _ => continue,
                 }
             }
-            TokenTree2::Ident(i) if i.to_string() == "fn" => {
+            TokenTree2::Ident(i) if *i == "fn" => {
                 let _ = stream.next();
                 break;
             }
@@ -484,10 +484,11 @@ fn expand_proc_macro(
     })
 }
 
+#[allow(clippy::type_complexity)]
 fn get_helpers<S1: Into<Cow<'static, str>>, S2: Into<Cow<'static, str>>>() -> (
-    impl (for<'s> Fn(Span2, &'s str) -> Error),
-    impl (for<'s> Fn(TokenTree2, Span2, &'s str) -> Error),
-    impl (Fn(Option<TokenTree2>, Span2, S1, S2) -> Error),
+    impl for<'s> Fn(Span2, &'s str) -> Error,
+    impl for<'s> Fn(TokenTree2, Span2, &'s str) -> Error,
+    impl Fn(Option<TokenTree2>, Span2, S1, S2) -> Error,
 ) {
     (
         |span: Span2, s: &'_ str| -> Error {

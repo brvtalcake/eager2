@@ -1,5 +1,4 @@
 //! This library is not meant for public consumption
-#![feature(iter_intersperse)] // should soon be stabilized
 #![doc(hidden)]
 
 use std::borrow::Cow;
