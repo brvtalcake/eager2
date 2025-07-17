@@ -3,16 +3,18 @@ use std::iter::Peekable;
 use crate::{
     consts::{
         crate_path, eager_call_sigil, eager_call_sigil_proc_macro, get_eager_2_ident,
-        get_eager_2_pm_ident, get_token_stream_symbol,
+        get_eager_2_pm_ident,
     },
     parse::{expect_group, expect_ident, expect_punct, Param},
     pm::{
         Delimiter, Group, Ident, Literal, Punct, Spacing, Span, ToTokens, TokenStream, TokenTree,
     },
     state::State,
-    utils::{eager_data, ident_call_site, make_eager_proc_macro_body, NextOr},
+    utils::{eager_data, NextOr},
     Error,
 };
+
+use proc_macro2::{TokenStream as TokenStream2, Ident as Ident2, Group as Group2, Span as Span2, Delimiter as Delimiter2, TokenTree as TokenTree2};
 
 #[derive(Clone)]
 enum MacroKind {
@@ -39,30 +41,38 @@ impl MacroKind {
 }
 
 struct EagerProcMacro {
-    eager_sigil: TokenStream,
+    eager_sigil: TokenStream2,
     has_proc_macro_attr: bool,
-    attributes: TokenStream,
-    visibility: TokenStream,
-    name: Ident,
-    input: Ident,
-    input_type: TokenStream,
-    output_type: TokenStream,
-    body: Group,
+    attributes: TokenStream2,
+    visibility: TokenStream2,
+    name: Ident2,
+    input: Ident2,
+    input_type: TokenStream2,
+    output_type: TokenStream2,
+    body: Group2,
 }
 
+#[cfg(feature = "proc-macro-support")]
 impl ToTokens for EagerProcMacro {
     fn to_tokens(&self, tokens: &mut TokenStream) {
+        use quote::quote;
+
+        use crate::{parse::IdentOrString, utils::lifetime};
+
         let EagerProcMacro {
             input: user_input,
             input_type: user_input_type,
             output_type: user_output_type,
-            ..
+            eager_sigil,
+            has_proc_macro_attr,
+            attributes,
+            visibility,
+            name,
+            body
         } = self;
-        let input = get_eager_2_pm_ident(Some("input"));
-        let input_output_type = get_token_stream_symbol();
 
         let mut maybe_proc_macro_attr = TokenStream::new();
-        if !self.has_proc_macro_attr {
+        if !has_proc_macro_attr {
             maybe_proc_macro_attr.extend(Punct::new('#', Spacing::Alone).into_token_stream());
             maybe_proc_macro_attr.extend(
                 Group::new(
@@ -72,41 +82,92 @@ impl ToTokens for EagerProcMacro {
                 .into_token_stream(),
             );
         }
+        let maybe_proc_macro_attr = Into::<TokenStream2>::into(maybe_proc_macro_attr);
 
-        let mut args = TokenStream::new();
-        args.extend([
-            input.to_token_stream(),
-            Punct::new(':', Spacing::Alone).into_token_stream(),
-            input_output_type.clone(),
-        ]);
+        let input = get_eager_2_pm_ident(Some("input"));
+        let user_lambda = get_eager_2_pm_ident(Some("user_lambda"));
+        let input_copy = get_eager_2_pm_ident(Some("input_copy"));
+        let iter = get_eager_2_pm_ident(Some("iter"));
+        let eager_checks = Into::<TokenStream2>::into(lifetime(IdentOrString::String("eager_checks".to_owned())));
+        let sigil = get_eager_2_pm_ident(Some("sigil"));
+        let tmp = get_eager_2_pm_ident(Some("tmp"));
+        let eager_group = get_eager_2_pm_ident(Some("eager_group"));
+        let res = get_eager_2_pm_ident(Some("res"));
+        let tt = get_eager_2_pm_ident(Some("tt"));
+        tokens.extend([quote! {
+            #maybe_proc_macro_attr
+            #attributes
+            #visibility fn #name (#input: ::proc_macro::TokenStream) -> ::proc_macro::TokenStream {
+                let mut #user_lambda = |#user_input: #user_input_type| -> #user_output_type #body;
+                let #input_copy = #input.clone();
+                #eager_checks: {
+                    let #sigil = #eager_sigil;
+                    let mut #iter = #input.into_iter();
+                    let mut #eager_group = ::proc_macro::TokenStream::new();
+                    let mut #res = ::proc_macro::TokenStream::new();
+                    
+                    match #iter.next()
+                    {
+                        Some(#tt @ ::proc_macro::TokenTree::Literal(#tmp)) if #tmp.to_string() == #sigil.to_string() => {
+                            #eager_group.extend([::proc_macro::TokenTree::from(#tt.clone())]);
+                        },
+                        _ => break #eager_checks,
+                    }
 
-        tokens.extend([
-            // #[proc_macro]
-            maybe_proc_macro_attr,
-            // #[other_attributes]...
-            self.attributes.clone(),
-            // pub fn <proc macro name> (<input>: ::proc_macro::TokenStream)
-            self.visibility.clone(),
-            Ident::new("fn", Span::call_site()).into_token_stream(),
-            self.name.to_token_stream(),
-            Group::new(Delimiter::Parenthesis, args).into_token_stream(),
-            // ->
-            Punct::new('-', Spacing::Joint).into_token_stream(),
-            Punct::new('>', Spacing::Alone).into_token_stream(),
-            // ::proc_macro::TokenStream
-            input_output_type.clone(),
-            // actual body
-            make_eager_proc_macro_body(
-                &self.eager_sigil,
-                &input,
-                &input_output_type,
-                &input_output_type,
-                user_input,
-                user_input_type,
-                user_output_type,
-                &self.body,
-            ),
-        ]);
+                    match #iter.next()
+                    {
+                        Some(#tt @ ::proc_macro::TokenTree::Group(#tmp)) if #tmp.delimiter() == ::proc_macro::Delimiter::Bracket => {
+                            #eager_group.extend([::proc_macro::TokenTree::from(#tt.clone())]);
+                        },
+                        _ => break #eager_checks,
+                    }
+
+                    #eager_group.extend([
+                        Into::<::proc_macro::TokenStream>::into(
+                            #user_lambda(
+                                #iter.collect::<::proc_macro::TokenStream>()
+                                    .into::<#user_input_type>()
+                            )
+                        )
+                    ]);
+
+                    #res.extend([
+                        ::proc_macro::TokenTree::from(
+                            ::proc_macro::Punct::new(':', ::proc_macro::Spacing::Joint)
+                        ),
+                        ::proc_macro::TokenTree::from(
+                            ::proc_macro::Punct::new(':', ::proc_macro::Spacing::Joint)
+                        ),
+                        ::proc_macro::TokenTree::from(
+                            ::proc_macro::Ident::new("eager2", ::proc_macro::Span::call_site())
+                        ),
+                        ::proc_macro::TokenTree::from(
+                            ::proc_macro::Punct::new(':', ::proc_macro::Spacing::Joint)
+                        ),
+                        ::proc_macro::TokenTree::from(
+                            ::proc_macro::Punct::new(':', ::proc_macro::Spacing::Joint)
+                        ),
+                        ::proc_macro::TokenTree::from(
+                            ::proc_macro::Ident::new("eager", ::proc_macro::Span::call_site())
+                        ),
+                        ::proc_macro::TokenTree::from(
+                            ::proc_macro::Punct::new('!', ::proc_macro::Spacing::Alone)
+                        ),
+                        ::proc_macro::TokenTree::from(
+                            ::proc_macro::Group::new(::proc_macro::Delimiter::Brace, #eager_group)
+                        )
+                    ]);
+
+                    return #res;
+                }
+
+                Into::<::proc_macro::TokenStream>::into(
+                    #user_lambda(
+                        #input_copy.into::<#user_input_type>()
+                    )
+                )
+            }
+        }.into()] as [TokenStream; _]);
     }
 }
 
@@ -236,25 +297,80 @@ impl ToTokens for Rules {
     }
 }
 
-pub fn expand_proc_macro(
-    span: Span,
-    hidden_ident: &Ident,
-    crate_path: &TokenStream,
-    eager_call_sigil: &TokenStream,
-    stream: &mut Peekable<&mut dyn Iterator<Item = TokenTree>>,
+#[cfg(feature = "proc-macro-support")]
+fn expand_proc_macro(
+    span: Span2,
+    eager_call_sigil: &TokenStream2,
+    stream: &mut Peekable<&mut dyn Iterator<Item = TokenTree2>>,
 ) -> Result<EagerProcMacro, Error> {
-    todo!();
-    Ok(EagerProcMacro {
-        eager_sigil: eager_call_sigil.clone(),
-        has_proc_macro_attr: Default::default(),
-        attributes: Default::default(),
-        visibility: Default::default(),
-        name: Ident::new("blah", Span::call_site()),
-        input: Ident::new("blah", Span::call_site()),
-        input_type: Default::default(),
-        output_type: Default::default(),
-        body: Group::new(Delimiter::Brace, Default::default()),
-    })
+    let mut attributes = vec![];
+    let mut visibility = None;
+    loop {
+        match stream.peek().ok_or_else(|| Error {
+                    span: span.unwrap(),
+                    msg: "unexpected end of input".into(),
+                    note: Some(crate::Note {
+                        span: None,
+                        msg: "while trying to match start of proc-macro definition".into(),
+                    }),
+                })?
+        {
+            TokenTree2::Punct(p) if p.as_char() == '#' => {
+                let pound = stream.next().unwrap();
+                attributes.push(pound);
+
+                let g = stream.next_or(span).map_err(|sp| Error {
+                            span: sp.unwrap(),
+                            msg: "unexpected end of input".into(),
+                            note: Some(crate::Note {
+                                span: None,
+                                msg: "while trying to match proc-macro attribute".into(),
+                            }),
+                        })?;
+                attributes.push(g.into());
+            },
+            TokenTree2::Ident(i) if i.to_string() == "pub" => {
+                visibility = Some(TokenStream2::new());
+                unsafe {visibility.as_mut().unwrap_unchecked().extend([stream.next().unwrap_unchecked()]);}
+
+                match stream.peek()
+                {
+                    Some(TokenTree2::Group(g)) if g.delimiter() == Delimiter2::Parenthesis => {
+                        unsafe {visibility.as_mut().unwrap_unchecked().extend([stream.next().unwrap_unchecked()]);}
+                    },
+                    _ => continue
+                }
+            },
+            TokenTree2::Ident(i) if i.to_string() == "fn" => {
+                let _ = stream.next();
+                break;
+            },
+            _ => {}
+        }
+    }
+
+    let name = stream.next().ok_or_else(|| Error {
+                    span: span.unwrap(),
+                    msg: "unexpected end of input".into(),
+                    note: Some(crate::Note {
+                        span: None,
+                        msg: "while trying to match start of proc-macro definition".into(),
+                    }),
+                }).and_then(|tt| match tt
+                {
+                    TokenTree2::Ident(i) => Ok(i),
+                    other => Err(
+                        Error {
+                    span: other.span().unwrap(),
+                    msg: "unexpected token".into(),
+                    note: Some(crate::Note {
+                        span: None,
+                        msg: "while trying to match name of proc-macro".into(),
+                    }),
+                }
+                    )
+                })?;
+    todo!()
 }
 pub fn expand_rules(
     span: Span,
@@ -514,32 +630,15 @@ pub fn eager_macro(attr: TokenStream, stream: TokenStream) -> Result<TokenStream
     .map(ToTokens::into_token_stream)
 }
 
-pub fn eager_proc_macro(attr: TokenStream, stream: TokenStream) -> Result<TokenStream, Error> {
+#[cfg(feature = "proc-macro-support")]
+pub fn eager_proc_macro(_attr: TokenStream2, stream: TokenStream2) -> Result<TokenStream, Error> {
     let eager_call_sigil = eager_call_sigil_proc_macro();
-    let crate_path = crate_path();
-    let span = Span::call_site();
+    let span = Span2::call_site();
 
-    let hidden_ident = {
-        let mut stream = attr.into_iter();
-        let hidden_ident = match stream.next() {
-            Some(attr) => expect_ident(Ok(attr), Param::Named("eager_ident"))?,
-            None => get_eager_2_ident(),
-        };
-        if stream.next().is_some() {
-            return Err(Error {
-                span,
-                msg: "`eager_proc_macro` only takes 1 input".into(),
-                note: None,
-            });
-        }
-        hidden_ident
-    };
-    let stream: &mut dyn Iterator<Item = TokenTree> = &mut stream.into_iter();
+    let stream: &mut dyn Iterator<Item = TokenTree2> = &mut stream.into_iter();
 
     expand_proc_macro(
         span,
-        &hidden_ident,
-        &crate_path,
         &eager_call_sigil,
         &mut stream.peekable(),
     )

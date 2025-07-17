@@ -1,7 +1,6 @@
 use proc_macro::{Ident, Punct, Spacing, Span};
 
 use crate::{
-    consts::{get_eager_2_pm_ident, get_path_sep},
     parse::IdentOrString,
     pm::{Delimiter, Group, Literal, ToTokens, TokenStream},
 };
@@ -143,26 +142,6 @@ pub(crate) fn decl(
     stream
 }
 
-#[must_use]
-pub(crate) fn path(
-    with_initial_sep: bool,
-    components: impl IntoIterator<Item: ToTokens>,
-) -> TokenStream {
-    let sep = get_path_sep();
-    let mut stream = if with_initial_sep {
-        sep.clone()
-    } else {
-        TokenStream::new()
-    };
-    stream.extend(
-        components
-            .into_iter()
-            .map(ToTokens::into_token_stream)
-            .intersperse_with(|| sep.clone()),
-    );
-    stream
-}
-
 trait ChainMethod: ToTokens + Sized {
     fn chain_method(
         self,
@@ -198,63 +177,3 @@ pub(crate) trait Function: ToTokens + Sized {
 }
 
 impl<T: ToTokens + Sized> Function for T {}
-
-#[must_use]
-#[inline]
-pub(crate) fn make_eager_proc_macro_body(
-    eager_call_sigil: &TokenStream,
-    input: &Ident,
-    input_type: &TokenStream,
-    output_type: &TokenStream,
-    user_input: &Ident,
-    user_input_type: &TokenStream,
-    user_output_type: &TokenStream,
-    body: &Group,
-) -> TokenStream {
-    braced([
-        // let <user-lambda> = ... ;
-        decl(
-            false,
-            get_eager_2_pm_ident(Some("user_lambda")).into_token_stream(),
-            [
-                // | <user-input>: <user-input-type> | -> <user-output-type>
-                punct_alone('|'),
-                user_input.to_token_stream(),
-                punct_alone(':'),
-                user_input_type.clone(),
-                punct_alone('|'),
-                punct_joint('-'),
-                punct_alone('>'),
-                user_output_type.clone(),
-                // { ... };
-                body.to_token_stream(),
-            ],
-            None::<TokenStream>,
-        ),
-        // let mut <input-copy> = <input>.clone();
-        decl(
-            true,
-            get_eager_2_pm_ident(Some("input_copy")),
-            input
-                .to_token_stream()
-                .chain_method(ident_call_site("clone"), [] as [TokenStream; _]),
-            Some(input_type.clone()),
-        ),
-        // 'eager_rule: { <test-if-eager-evaluating> }
-        lifetime(IdentOrString::Ident(get_eager_2_pm_ident(Some(
-            "eager_rule",
-        )))),
-        punct_alone(':'),
-        braced([
-            // let mut <iter> = <input>.into_iter();
-            decl(
-                true,
-                get_eager_2_pm_ident(Some("iter")),
-                input
-                    .to_token_stream()
-                    .chain_method(ident_call_site("into_iter"), [] as [TokenStream; _]),
-                None::<TokenStream>,
-            ),
-        ]),
-    ])
-}

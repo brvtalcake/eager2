@@ -21,4 +21,6 @@ litrs = { version = "0.4", default-features = false }
 eager2-core = { workspace = true }
 
 [features]
+default = ["proc-macro-support"]
 trace_macros = []
+proc-macro-support = ["eager2-core/proc-macro-support"]

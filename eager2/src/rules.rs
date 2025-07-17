@@ -28,9 +28,10 @@ pub fn eager_macro(attr: TokenStream, stream: TokenStream) -> TokenStream {
     output
 }
 
+#[cfg(feature = "proc-macro-support")]
 pub fn eager_proc_macro(attr: TokenStream, stream: TokenStream) -> TokenStream {
     init();
-    let output = match eager2_core::rules::eager_proc_macro(attr, stream) {
+    let output = match eager2_core::rules::eager_proc_macro(attr.into(), stream.into()) {
         Ok(output) => output,
         Err(err) => return err.into_token_stream(),
     };

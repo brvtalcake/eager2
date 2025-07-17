@@ -324,6 +324,7 @@ pub fn eager_macro(attr: TokenStream, stream: TokenStream) -> TokenStream {
 }
 
 /// Declares an [eager!](macro.eager.html)-enabled proc-macro.
+#[cfg(feature = "proc-macro-support")]
 #[proc_macro_attribute]
 pub fn eager_proc_macro(attr: TokenStream, stream: TokenStream) -> TokenStream {
     #[allow(clippy::useless_conversion)]
