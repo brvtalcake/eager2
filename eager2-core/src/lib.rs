@@ -9,8 +9,6 @@ extern crate proc_macro;
 
 #[cfg(not(feature = "testing"))]
 pub mod pm {
-    use std::ops::Add;
-
     pub use proc_macro::{
         token_stream, Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream,
         TokenTree,

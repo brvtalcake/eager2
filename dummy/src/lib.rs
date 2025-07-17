@@ -1,25 +1,10 @@
-use eager2::{eager, eager_macro_rules};
-use proc_macro::TokenStream;
+use eager2::eager_proc_macro;
+use proc_macro::{Punct, Spacing, TokenStream, TokenTree};
 
-#[proc_macro]
-pub fn do_something(input: TokenStream) -> TokenStream {
-    input
+#[eager_proc_macro]
+pub fn add(input: TokenStream) -> TokenStream {
+    let mut res = TokenStream::new();
+    res.extend([TokenTree::from(Punct::new('+', Spacing::Alone))]);
+    res.extend(input.into_iter().collect::<Vec<TokenTree>>());
+    res
 }
-
-macro_rules! test {
-    ($lit:literal $($tokens:tt)*) => {
-        $lit
-    };
-    (0𓊆eager2𓊇[$($__eager2_ident_hyR7dMdkMPcptU6h21dioFE3EhoLprgj:tt)*]$($tokens:tt)*) => {
-        $crate::eager!{
-            0𓊆eager2𓊇[$($__eager2_ident_hyR7dMdkMPcptU6h21dioFE3EhoLprgj)*]$($tokens)* $($tokens)*
-        }
-    };
-    ($($tokens:tt)*) => {
-        $($tokens)* $($tokens)*
-    };
-}
-
-eager! { test! {
-    a b
-}}

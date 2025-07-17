@@ -35,16 +35,6 @@ where
 }
 
 #[must_use]
-pub(crate) fn lit_string(s: &str) -> TokenStream {
-    Literal::string(s).into_token_stream()
-}
-
-#[must_use]
-pub(crate) fn punct_alone(ch: char) -> TokenStream {
-    Punct::new(ch, Spacing::Alone).into_token_stream()
-}
-
-#[must_use]
 pub(crate) fn punct_joint(ch: char) -> TokenStream {
     Punct::new(ch, Spacing::Joint).into_token_stream()
 }
@@ -52,36 +42,6 @@ pub(crate) fn punct_joint(ch: char) -> TokenStream {
 #[must_use]
 pub(crate) fn ident_call_site(ident: &str) -> TokenStream {
     Ident::new(ident, Span::call_site()).into_token_stream()
-}
-
-#[must_use]
-pub(crate) fn braced<T>(collection: impl IntoIterator<Item = T>) -> TokenStream
-where
-    TokenStream: Extend<T>,
-{
-    let mut stream = TokenStream::new();
-    stream.extend(collection);
-    Group::new(Delimiter::Brace, stream).into_token_stream()
-}
-
-#[must_use]
-pub(crate) fn bracketed<T>(collection: impl IntoIterator<Item = T>) -> TokenStream
-where
-    TokenStream: Extend<T>,
-{
-    let mut stream = TokenStream::new();
-    stream.extend(collection);
-    Group::new(Delimiter::Bracket, stream).into_token_stream()
-}
-
-#[must_use]
-pub(crate) fn parenthesized<T>(collection: impl IntoIterator<Item = T>) -> TokenStream
-where
-    TokenStream: Extend<T>,
-{
-    let mut stream = TokenStream::new();
-    stream.extend(collection);
-    Group::new(Delimiter::Parenthesis, stream).into_token_stream()
 }
 
 #[must_use]
@@ -111,69 +71,3 @@ pub fn eager_data(
     tokens.extend(tail);
     tokens
 }
-
-#[must_use]
-pub(crate) fn decl(
-    mutable: bool,
-    ident: impl ToTokens,
-    value: impl ToTokens,
-    ty: Option<impl ToTokens>,
-) -> TokenStream {
-    let mut stream = TokenStream::new();
-    stream.extend([
-        ident_call_site("let"),
-        if mutable {
-            ident_call_site("mut")
-        } else {
-            TokenStream::new()
-        },
-        ident.into_token_stream(),
-        if let Some(ty) = ty {
-            let mut tmp = TokenStream::new();
-            tmp.extend([punct_alone(':'), ty.into_token_stream()]);
-            tmp
-        } else {
-            TokenStream::new()
-        },
-        punct_alone('='),
-        value.into_token_stream(),
-        punct_alone(';'),
-    ]);
-    stream
-}
-
-trait ChainMethod: ToTokens + Sized {
-    fn chain_method(
-        self,
-        method: TokenStream,
-        args: impl IntoIterator<Item: ToTokens>,
-    ) -> TokenStream {
-        let mut stream = Group::new(Delimiter::None, self.into_token_stream()).into_token_stream();
-        stream.extend([
-            punct_alone('.'),
-            method.into_token_stream(),
-            parenthesized(
-                args.into_iter()
-                    .map(ToTokens::into_token_stream)
-                    .intersperse(punct_alone(',')),
-            ),
-        ]);
-        stream
-    }
-}
-impl<T: ToTokens + Sized> ChainMethod for T {}
-
-pub(crate) trait Function: ToTokens + Sized {
-    fn funcall(self, args: impl IntoIterator<Item: ToTokens>) -> TokenStream {
-        let mut stream = Group::new(Delimiter::None, self.into_token_stream()).into_token_stream();
-        parenthesized(
-            args.into_iter()
-                .map(ToTokens::into_token_stream)
-                .intersperse(punct_alone(',')),
-        )
-        .to_tokens(&mut stream);
-        stream
-    }
-}
-
-impl<T: ToTokens + Sized> Function for T {}
