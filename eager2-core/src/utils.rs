@@ -1,8 +1,6 @@
-use proc_macro::{Ident, Punct, Spacing, Span};
-
 use crate::{
     parse::IdentOrString,
-    pm::{Delimiter, Group, Literal, ToTokens, TokenStream},
+    pm::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, ToTokens, TokenStream},
 };
 pub trait NextOr: Iterator {
     fn next_or<E>(&mut self, e: E) -> Result<Self::Item, E>;
