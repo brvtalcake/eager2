@@ -1,6 +1,6 @@
-#![feature(decl_macro)]
+#![cfg_attr(rustchan = "nightly", feature(decl_macro))]
 
-#[cfg(test)]
+#[cfg(all(rustchan = "nightly", test))]
 mod does_it_compile {
     use eager2::{eager, eager_macro};
 
