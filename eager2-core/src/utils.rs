@@ -35,25 +35,16 @@ where
 }
 
 #[must_use]
-pub(crate) fn punct_joint(ch: char) -> TokenStream {
-    Punct::new(ch, Spacing::Joint).into_token_stream()
-}
-
-#[must_use]
-pub(crate) fn ident_call_site(ident: &str) -> TokenStream {
-    Ident::new(ident, Span::call_site()).into_token_stream()
-}
-
-#[must_use]
 pub(crate) fn lifetime(name: IdentOrString) -> TokenStream {
     let mut stream = TokenStream::new();
-    punct_joint('\'').to_tokens(&mut stream);
-    ident_call_site(
+    Punct::new('\'', Spacing::Joint).to_tokens(&mut stream);
+    Ident::new(
         match name {
             IdentOrString::Ident(i) => i.to_string(),
             IdentOrString::String(s) => s,
         }
         .as_str(),
+        Span::call_site(),
     )
     .to_tokens(&mut stream);
     stream
@@ -73,7 +64,9 @@ pub fn eager_data(
 }
 
 /// Roughly the same as `quote::quote!`, but faster, without repetitions,
-/// and working directly with proc_macro
+/// and working directly with proc_macro. There might exist some valid Rust
+/// code which could not be recognised by this macro, but it's enough for
+/// our use case
 #[macro_export]
 macro_rules! interpolate {
     {} => {
@@ -247,7 +240,8 @@ pub(crate) fn quote_lifetime(lifetime: &str) -> TokenStream {
 
     let mut stream = TokenStream::new();
 
-    // SAFETY: « ' » needs one byte to be encoded as UTF-8
+    // SAFETY: « ' » needs one byte to be encoded as UTF-8,
+    // so removing it still yields valid UTF-8
     let name = unsafe { str::from_utf8_unchecked(&lifetime.as_bytes()[1..]) };
 
     Punct::new('\'', Spacing::Joint).to_tokens(&mut stream);
