@@ -323,6 +323,13 @@ pub fn eager_macro(attr: TokenStream, stream: TokenStream) -> TokenStream {
     rules::eager_macro(attr.into(), stream.into()).into()
 }
 
+/// Declares an [eager!](macro.eager.html)-enabled proc-macro.
+#[proc_macro_attribute]
+pub fn eager_proc_macro(attr: TokenStream, stream: TokenStream) -> TokenStream {
+    #[allow(clippy::useless_conversion)]
+    rules::eager_proc_macro(attr.into(), stream.into()).into()
+}
+
 /// [[eager!](macro.eager.html)] Emulates eager expansion of macros.
 ///
 /// # Examples
@@ -592,8 +599,6 @@ pub fn cfg(stream: TokenStream) -> TokenStream {
     impls::eager_wrap(stream.into(), "cfg").into()
 }
 
-/// 🚧 Not yet implemented!
-///
 /// [[eager!](macro.eager.html)] Expands to the column number at which it was invoked.
 ///
 /// With [`line!`] and [`file!`], these macros provide debugging information for
@@ -662,8 +667,6 @@ pub fn option_env(stream: TokenStream) -> TokenStream {
     impls::eager_wrap(stream.into(), "option_env").into()
 }
 
-/// 🚧 Not yet implemented!
-///
 /// [[eager!](macro.eager.html)] Expands to the file name in which it was invoked.
 ///
 /// With [`line!`] and [`column!`], these macros provide debugging information for
@@ -727,8 +730,6 @@ pub fn include_str(stream: TokenStream) -> TokenStream {
     impls::eager_wrap(stream.into(), "include_str").into()
 }
 
-/// 🚧 Not yet implemented!
-///
 /// [[eager!](macro.eager.html)] Expands to the line number on which it was invoked.
 ///
 /// With [`column!`] and [`file!`], these macros provide debugging information for
