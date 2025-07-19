@@ -15,6 +15,8 @@ rust-version = "1.88"
 proc-macro = true
 path = "src/lib.rs"
 
+#[[target.'cfg(version = "1.88")'.test]] ???
+
 [dependencies]
 convert_case = "0.8.0"
 litrs = { version = "0.4", default-features = false }
@@ -24,6 +26,4 @@ eager2-core = { workspace = true }
 dummy = { path = "../dummy" }
 
 [features]
-default = ["proc-macro-support"]
-trace_macros = []
-proc-macro-support = ["eager2-core/proc-macro-support"]
+trace-macros = []

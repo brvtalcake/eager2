@@ -20,5 +20,3 @@ quote = { version = "1", optional = true }
 
 [features]
 testing = ["dep:proc-macro2", "dep:quote"]
-proc-macro-support = ["dep:proc-macro2", "dep:quote"]
-default = ["proc-macro-support"]

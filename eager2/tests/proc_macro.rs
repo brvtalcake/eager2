@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod test {
-    use eager2::eager;
     use dummy::add;
+    use eager2::eager;
 
     #[test]
     fn it_works() {

@@ -2,8 +2,6 @@ use std::str::FromStr;
 
 use crate::pm::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, ToTokens, TokenStream};
 
-use proc_macro2::{Ident as Ident2, Span as Span2, TokenStream as TokenStream2};
-
 const EAGER2_IDENT: &str = "__eager2_ident_hyR7dMdkMPcptU6h21dioFE3EhoLprgj";
 pub const EAGER_CALL_SIGIL: &str = "0𓊆eager2𓊇";
 pub const LAZY_SIGIL: &str = "𓆉";
@@ -15,13 +13,12 @@ pub fn get_eager_2_ident() -> Ident {
     Ident::new(EAGER2_IDENT, Span::call_site())
 }
 
-#[cfg(feature = "proc-macro-support")]
 #[must_use]
 #[inline(always)]
-pub(crate) fn get_eager_2_pm_ident(suffix: Option<&str>) -> Ident2 {
-    Ident2::new(
+pub(crate) fn get_eager_2_pm_ident(suffix: Option<&str>) -> Ident {
+    Ident::new(
         format!("{EAGER2_IDENT}{s}", s = suffix.unwrap_or_default()).as_str(),
-        Span2::call_site(),
+        Span::call_site(),
     )
 }
 
@@ -31,13 +28,12 @@ pub fn eager_call_sigil() -> Literal {
     Literal::from_str(EAGER_CALL_SIGIL).unwrap()
 }
 
-#[cfg(feature = "proc-macro-support")]
 #[must_use]
 #[inline(always)]
-pub(crate) fn eager_call_sigil_proc_macro() -> TokenStream2 {
-    use quote::quote;
+pub(crate) fn eager_call_sigil_proc_macro() -> TokenStream {
+    use crate::interpolate;
 
-    quote! {
+    interpolate! {
         ::proc_macro::Literal::from_str(#EAGER_CALL_SIGIL).unwrap()
     }
 }
